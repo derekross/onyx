@@ -5,6 +5,7 @@ import { gfm } from '@milkdown/preset-gfm';
 import { nord } from '@milkdown/theme-nord';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
 import { invoke } from '@tauri-apps/api/core';
+import { hashtagPlugin, setHashtagClickHandler } from '../lib/hashtagPlugin';
 
 import '@milkdown/theme-nord/style.css';
 
@@ -14,6 +15,7 @@ interface EditorProps {
   filePath: string | null;
   vaultPath: string | null;
   onCreateFile?: () => void;
+  onHashtagClick?: (tag: string) => void;
 }
 
 const MilkdownEditor: Component<EditorProps> = (props) => {
@@ -44,6 +46,9 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       editorInstance = null;
     }
 
+    // Set up hashtag click handler
+    setHashtagClickHandler(props.onHashtagClick || null);
+
     editorInstance = await Editor.make()
       .config((ctx) => {
         ctx.set(rootCtx, container);
@@ -53,6 +58,7 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       .use(commonmark)
       .use(gfm)
       .use(listener)
+      .use(hashtagPlugin)
       // Configure listener after the plugin is loaded
       .config((ctx) => {
         ctx.get(listenerCtx).markdownUpdated((ctx, markdown, prevMarkdown) => {

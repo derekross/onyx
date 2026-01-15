@@ -217,6 +217,31 @@ body {
 .sidebar-search {
   padding: 8px;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.search-save-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.search-save-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--accent);
+}
+
+.search-save-btn.saved {
+  color: var(--accent);
 }
 
 .sidebar-search-input {
@@ -239,6 +264,61 @@ body {
   text-align: center;
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+/* Bookmark Sections */
+.bookmark-section {
+  margin-bottom: 8px;
+}
+
+.bookmark-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  padding: 8px 16px 4px;
+  letter-spacing: 0.5px;
+}
+
+.file-tree-item.saved-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-tree-item.saved-search svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.file-tree-item.saved-search span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookmark-remove-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.file-tree-item.saved-search:hover .bookmark-remove-btn {
+  opacity: 1;
+}
+
+.bookmark-remove-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
 }
 
 .search-result-item {
@@ -619,6 +699,21 @@ body {
 .milkdown-editor blockquote { border-left: 4px solid var(--accent); padding-left: 1em; margin-left: 0; color: var(--text-secondary); }
 .milkdown-editor a { color: var(--accent); text-decoration: none; }
 .milkdown-editor a:hover { text-decoration: underline; }
+
+/* Hashtags */
+.milkdown-editor .hashtag {
+  color: #a78bfa;
+  background: rgba(139, 92, 246, 0.15);
+  padding: 1px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.milkdown-editor .hashtag:hover {
+  background: rgba(139, 92, 246, 0.25);
+  text-decoration: none;
+}
+
 .milkdown-editor hr { border: none; border-top: 1px solid var(--border); margin: 1.5em 0; }
 .milkdown-editor table { border-collapse: collapse; width: 100%; margin-bottom: 1em; }
 .milkdown-editor th, .milkdown-editor td { border: 1px solid var(--border); padding: 0.5em 1em; text-align: left; }

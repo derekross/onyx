@@ -38,12 +38,19 @@ const App: Component = () => {
   const [sidebarWidth, setSidebarWidth] = createSignal(260);
   let createNoteFromSidebar: (() => void) | null = null;
   let refreshSidebar: (() => void) | null = null;
+  let setSearchQuery: ((query: string) => void) | null = null;
   const [isResizing, setIsResizing] = createSignal<'sidebar' | 'terminal' | null>(null);
   const [resizeStartX, setResizeStartX] = createSignal(0);
   const [resizeStartWidth, setResizeStartWidth] = createSignal(0);
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false);
   const [sidebarView, setSidebarView] = createSignal<SidebarView>('files');
-  const [bookmarks, setBookmarks] = createSignal<string[]>([]);
+  // TODO: Sync bookmarks and saved searches via Nostr (encrypted user preferences)
+  const [bookmarks, setBookmarks] = createSignal<string[]>(
+    JSON.parse(localStorage.getItem('bookmarks') || '[]')
+  );
+  const [savedSearches, setSavedSearches] = createSignal<string[]>(
+    JSON.parse(localStorage.getItem('savedSearches') || '[]')
+  );
 
   // Close tab confirmation modal
   const [closeTabConfirm, setCloseTabConfirm] = createSignal<{ index: number; name: string } | null>(null);
@@ -285,10 +292,35 @@ const App: Component = () => {
 
   const toggleBookmark = (path: string) => {
     const current = bookmarks();
+    let updated: string[];
     if (current.includes(path)) {
-      setBookmarks(current.filter(p => p !== path));
+      updated = current.filter(p => p !== path);
     } else {
-      setBookmarks([...current, path]);
+      updated = [...current, path];
+    }
+    setBookmarks(updated);
+    localStorage.setItem('bookmarks', JSON.stringify(updated));
+  };
+
+  const toggleSavedSearch = (query: string) => {
+    const current = savedSearches();
+    let updated: string[];
+    if (current.includes(query)) {
+      updated = current.filter(q => q !== query);
+    } else {
+      updated = [...current, query];
+    }
+    setSavedSearches(updated);
+    localStorage.setItem('savedSearches', JSON.stringify(updated));
+  };
+
+  // Handle hashtag clicks from editor
+  const handleHashtagClick = (tag: string) => {
+    // Switch to search view
+    switchSidebarView('search');
+    // Set search query with tag: prefix
+    if (setSearchQuery) {
+      setSearchQuery(`#${tag}`);
     }
   };
 
@@ -537,8 +569,11 @@ const App: Component = () => {
             view={sidebarView()}
             bookmarks={bookmarks()}
             onToggleBookmark={toggleBookmark}
+            savedSearches={savedSearches()}
+            onToggleSavedSearch={toggleSavedSearch}
             exposeCreateNote={(fn) => { createNoteFromSidebar = fn; }}
             exposeRefresh={(fn) => { refreshSidebar = fn; }}
+            exposeSearchQuery={(fn) => { setSearchQuery = fn; }}
           />
         </div>
         <div
@@ -590,6 +625,7 @@ const App: Component = () => {
               filePath={currentTab()?.path || null}
               vaultPath={vaultPath()}
               onCreateFile={createNewNote}
+              onHashtagClick={handleHashtagClick}
             />
           </div>
 
