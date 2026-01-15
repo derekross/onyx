@@ -12,7 +12,7 @@ interface FileEntry {
 type SidebarView = 'files' | 'search' | 'bookmarks';
 
 interface SidebarProps {
-  onFileSelect: (path: string) => void;
+  onFileSelect: (path: string, line?: number) => void;
   currentFile: string | null;
   vaultPath: string | null;
   onVaultOpen: (path: string) => void;
@@ -771,7 +771,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
                     {(match) => (
                       <div
                         class="search-result-match"
-                        onClick={() => props.onFileSelect(result.path)}
+                        onClick={() => props.onFileSelect(result.path, match.line)}
                       >
                         <span class="match-line">{match.line}</span>
                         <span class="match-content">{match.content}</span>

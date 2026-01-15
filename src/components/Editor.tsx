@@ -1,5 +1,5 @@
 import { Component, onCleanup, Show, createSignal, createEffect, on } from 'solid-js';
-import { Editor, rootCtx, defaultValueCtx } from '@milkdown/core';
+import { Editor, rootCtx, defaultValueCtx, editorViewCtx } from '@milkdown/core';
 import { commonmark } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
 import { nord } from '@milkdown/theme-nord';
@@ -16,6 +16,8 @@ interface EditorProps {
   vaultPath: string | null;
   onCreateFile?: () => void;
   onHashtagClick?: (tag: string) => void;
+  scrollToLine?: number | null;
+  onScrollComplete?: () => void;
 }
 
 const MilkdownEditor: Component<EditorProps> = (props) => {
@@ -117,6 +119,54 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
           console.log('Creating new editor with content:', props.content?.substring(0, 50));
           await createEditor(containerRef, props.content);
           console.log('Editor created successfully');
+        }
+      }
+    )
+  );
+
+  // Handle scroll to line
+  createEffect(
+    on(
+      () => props.scrollToLine,
+      (line) => {
+        if (line && editorInstance) {
+          // Give the editor a moment to render
+          setTimeout(() => {
+            try {
+              const ctx = editorInstance?.ctx;
+              if (!ctx) return;
+
+              const view = ctx.get(editorViewCtx);
+              const doc = view.state.doc;
+
+              // Find position of the target line
+              let pos = 0;
+              let currentLine = 1;
+
+              doc.descendants((node, nodePos) => {
+                if (currentLine >= line) return false;
+                if (node.isBlock) {
+                  currentLine++;
+                  pos = nodePos;
+                }
+                return true;
+              });
+
+              // Scroll to the position
+              const domAtPos = view.domAtPos(pos);
+              if (domAtPos.node) {
+                const element = domAtPos.node instanceof Element
+                  ? domAtPos.node
+                  : domAtPos.node.parentElement;
+                element?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }
+
+              // Clear the scroll target
+              props.onScrollComplete?.();
+            } catch (err) {
+              console.error('Failed to scroll to line:', err);
+            }
+          }, 100);
         }
       }
     )

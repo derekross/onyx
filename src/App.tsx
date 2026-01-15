@@ -39,6 +39,7 @@ const App: Component = () => {
   let createNoteFromSidebar: (() => void) | null = null;
   let refreshSidebar: (() => void) | null = null;
   let setSearchQuery: ((query: string) => void) | null = null;
+  const [scrollToLine, setScrollToLine] = createSignal<number | null>(null);
   const [isResizing, setIsResizing] = createSignal<'sidebar' | 'terminal' | null>(null);
   const [resizeStartX, setResizeStartX] = createSignal(0);
   const [resizeStartWidth, setResizeStartWidth] = createSignal(0);
@@ -144,11 +145,15 @@ const App: Component = () => {
   // Sync status for status bar
   const [syncStatus, setSyncStatus] = createSignal<'off' | 'idle' | 'syncing' | 'error'>('off');
 
-  const openFile = async (path: string) => {
+  const openFile = async (path: string, line?: number) => {
     // Check if already open
     const existingIndex = tabs().findIndex(t => t.path === path);
     if (existingIndex >= 0) {
       setActiveTabIndex(existingIndex);
+      // If line specified, scroll to it even if file is already open
+      if (line) {
+        setScrollToLine(line);
+      }
       return;
     }
 
@@ -159,6 +164,11 @@ const App: Component = () => {
 
       setTabs([...tabs(), { path, name, content, isDirty: false }]);
       setActiveTabIndex(tabs().length); // Will be the new last index after state updates
+
+      // Set line to scroll to after editor loads
+      if (line) {
+        setScrollToLine(line);
+      }
     } catch (err) {
       console.error('Failed to open file:', err);
     }
@@ -626,6 +636,8 @@ const App: Component = () => {
               vaultPath={vaultPath()}
               onCreateFile={createNewNote}
               onHashtagClick={handleHashtagClick}
+              scrollToLine={scrollToLine()}
+              onScrollComplete={() => setScrollToLine(null)}
             />
           </div>
 
