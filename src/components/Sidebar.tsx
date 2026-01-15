@@ -47,6 +47,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
   const [sortOrder, setSortOrder] = createSignal<'name' | 'modified'>('name');
   const [allCollapsed, setAllCollapsed] = createSignal(false);
   const [showVaultMenu, setShowVaultMenu] = createSignal(false);
+  const [deleteConfirm, setDeleteConfirm] = createSignal<{ path: string; name: string } | null>(null);
 
   const openVault = async () => {
     try {
@@ -194,17 +195,24 @@ const Sidebar: Component<SidebarProps> = (props) => {
     setRenameValue('');
   };
 
-  const handleDelete = async (path: string) => {
-    if (!confirm(`Are you sure you want to delete this?`)) return;
+  const handleDelete = (path: string) => {
+    const name = path.split('/').pop() || 'this item';
+    setDeleteConfirm({ path, name });
+    closeContextMenu();
+  };
+
+  const confirmDelete = async () => {
+    const item = deleteConfirm();
+    if (!item) return;
 
     try {
-      await invoke('delete_file', { path });
-      props.onFileDeleted(path);
+      await invoke('delete_file', { path: item.path });
+      props.onFileDeleted(item.path);
       await refreshFiles();
     } catch (err) {
       console.error('Failed to delete:', err);
     }
-    closeContextMenu();
+    setDeleteConfirm(null);
   };
 
   const handleMakeCopy = async (path: string) => {
@@ -826,6 +834,30 @@ const Sidebar: Component<SidebarProps> = (props) => {
           </div>
           <div class="context-menu-item danger" onClick={() => handleDelete(contextMenu()!.path)}>
             Delete
+          </div>
+        </div>
+      </Show>
+
+      {/* Delete Confirmation Modal */}
+      <Show when={deleteConfirm()}>
+        <div class="modal-overlay" onClick={() => setDeleteConfirm(null)}>
+          <div class="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div class="modal-header">
+              <h3>Delete "{deleteConfirm()!.name}"?</h3>
+              <button class="modal-close" onClick={() => setDeleteConfirm(null)}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
+            <div class="modal-body">
+              <p>This will permanently delete this item. This action cannot be undone.</p>
+            </div>
+            <div class="modal-footer">
+              <button class="setting-button secondary" onClick={() => setDeleteConfirm(null)}>Cancel</button>
+              <button class="setting-button danger" onClick={confirmDelete}>Delete</button>
+            </div>
           </div>
         </div>
       </Show>

@@ -1022,6 +1022,75 @@ body {
   height: 100%;
 }
 
+/* OpenCode Not Installed */
+.opencode-not-installed {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  text-align: center;
+  background: var(--bg-primary);
+}
+
+.opencode-not-installed-icon {
+  color: var(--text-secondary);
+  margin-bottom: 24px;
+  opacity: 0.6;
+}
+
+.opencode-not-installed h3 {
+  margin: 0 0 12px 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.opencode-not-installed p {
+  margin: 0 0 24px 0;
+  font-size: 14px;
+  color: var(--text-secondary);
+  max-width: 360px;
+  line-height: 1.5;
+}
+
+.opencode-install-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.opencode-install-btn:hover {
+  background: var(--accent-hover);
+}
+
+.opencode-retry-btn {
+  margin-top: 16px;
+  padding: 8px 16px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.opencode-retry-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
 /* Settings Modal */
 .settings-overlay {
   position: fixed;

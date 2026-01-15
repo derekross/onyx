@@ -44,6 +44,9 @@ const App: Component = () => {
   const [sidebarView, setSidebarView] = createSignal<SidebarView>('files');
   const [bookmarks, setBookmarks] = createSignal<string[]>([]);
 
+  // Close tab confirmation modal
+  const [closeTabConfirm, setCloseTabConfirm] = createSignal<{ index: number; name: string } | null>(null);
+
   // Auto-save timer
   let autoSaveTimeout: number | null = null;
 
@@ -165,13 +168,13 @@ const App: Component = () => {
   const closeTab = (index: number) => {
     const tab = tabs()[index];
     if (tab.isDirty) {
-      if (!confirm(`Save changes to ${tab.name}?`)) {
-        // Don't save, just close
-      } else {
-        saveTab(index);
-      }
+      setCloseTabConfirm({ index, name: tab.name });
+      return;
     }
+    doCloseTab(index);
+  };
 
+  const doCloseTab = (index: number) => {
     const newTabs = tabs().filter((_, i) => i !== index);
     setTabs(newTabs);
 
@@ -184,6 +187,21 @@ const App: Component = () => {
     if (newTabs.length === 0) {
       setActiveTabIndex(-1);
     }
+  };
+
+  const handleCloseTabSave = async () => {
+    const confirm = closeTabConfirm();
+    if (!confirm) return;
+    await saveTab(confirm.index);
+    doCloseTab(confirm.index);
+    setCloseTabConfirm(null);
+  };
+
+  const handleCloseTabDiscard = () => {
+    const confirm = closeTabConfirm();
+    if (!confirm) return;
+    doCloseTab(confirm.index);
+    setCloseTabConfirm(null);
   };
 
   const saveTab = async (index: number) => {
@@ -678,6 +696,31 @@ const App: Component = () => {
           vaultPath={vaultPath()}
           onSyncComplete={() => refreshSidebar?.()}
         />
+      </Show>
+
+      {/* Close Tab Confirmation Modal */}
+      <Show when={closeTabConfirm()}>
+        <div class="modal-overlay" onClick={() => setCloseTabConfirm(null)}>
+          <div class="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div class="modal-header">
+              <h3>Unsaved Changes</h3>
+              <button class="modal-close" onClick={() => setCloseTabConfirm(null)}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
+            <div class="modal-body">
+              <p>Do you want to save changes to "{closeTabConfirm()!.name}" before closing?</p>
+            </div>
+            <div class="modal-footer">
+              <button class="setting-button secondary" onClick={() => setCloseTabConfirm(null)}>Cancel</button>
+              <button class="setting-button secondary" onClick={handleCloseTabDiscard}>Don't Save</button>
+              <button class="setting-button" onClick={handleCloseTabSave}>Save</button>
+            </div>
+          </div>
+        </div>
       </Show>
     </div>
   );
