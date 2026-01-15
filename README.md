@@ -19,6 +19,27 @@ Onyx lets you write markdown notes locally and sync them securely across devices
 
 Download the latest release for your platform from the [Releases](https://github.com/derekross/onyx/releases) page.
 
+#### macOS Installation
+
+The app is not currently signed with an Apple Developer certificate, so macOS will show a warning that the app is "damaged" or from an "unidentified developer". To install:
+
+**Option 1: Remove quarantine attribute (recommended)**
+
+Open Terminal and run:
+```bash
+xattr -cr /Applications/Onyx.app
+```
+
+If you installed it elsewhere, replace `/Applications/Onyx.app` with the actual path.
+
+**Option 2: Right-click to open**
+
+1. Right-click (or Control+click) on Onyx.app
+2. Select "Open" from the context menu
+3. Click "Open" in the security dialog
+
+After doing this once, the app will open normally.
+
 ### Build from Source
 
 #### Prerequisites
