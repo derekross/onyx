@@ -1,0 +1,817 @@
+import { Component, createSignal, createEffect, For, Show } from 'solid-js';
+import { open } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
+
+interface FileEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  children?: FileEntry[];
+}
+
+type SidebarView = 'files' | 'search' | 'bookmarks';
+
+interface SidebarProps {
+  onFileSelect: (path: string) => void;
+  currentFile: string | null;
+  vaultPath: string | null;
+  onVaultOpen: (path: string) => void;
+  onFileCreated: (path: string) => void;
+  onFileDeleted: (path: string) => void;
+  view: SidebarView;
+  bookmarks: string[];
+  onToggleBookmark: (path: string) => void;
+}
+
+interface SearchResult {
+  path: string;
+  name: string;
+  matches: { line: number; content: string }[];
+}
+
+const Sidebar: Component<SidebarProps> = (props) => {
+  const [files, setFiles] = createSignal<FileEntry[]>([]);
+  const [expandedFolders, setExpandedFolders] = createSignal<Set<string>>(new Set());
+  const [contextMenu, setContextMenu] = createSignal<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
+  const [isCreating, setIsCreating] = createSignal<{ parentPath: string; type: 'file' | 'folder' } | null>(null);
+  const [newItemName, setNewItemName] = createSignal('');
+  const [isRenaming, setIsRenaming] = createSignal<string | null>(null);
+  const [renameValue, setRenameValue] = createSignal('');
+  const [draggedItem, setDraggedItem] = createSignal<string | null>(null);
+  const [dropTarget, setDropTarget] = createSignal<string | null>(null);
+  const [searchQuery, setSearchQuery] = createSignal('');
+  const [searchResults, setSearchResults] = createSignal<SearchResult[]>([]);
+  const [isSearching, setIsSearching] = createSignal(false);
+  const [sortOrder, setSortOrder] = createSignal<'name' | 'modified'>('name');
+  const [allCollapsed, setAllCollapsed] = createSignal(false);
+  const [showVaultMenu, setShowVaultMenu] = createSignal(false);
+
+  const openVault = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: 'Select Vault Folder',
+      });
+
+      if (selected && typeof selected === 'string') {
+        props.onVaultOpen(selected);
+        await loadFiles(selected);
+      }
+    } catch (err) {
+      console.error('Failed to open vault:', err);
+    }
+  };
+
+  const loadFiles = async (path: string) => {
+    try {
+      const entries = await invoke<FileEntry[]>('list_files', { path });
+      setFiles(entries);
+    } catch (err) {
+      console.error('Failed to load files:', err);
+    }
+  };
+
+  // Reload files when vault changes
+  const refreshFiles = async () => {
+    if (props.vaultPath) {
+      await loadFiles(props.vaultPath);
+    }
+  };
+
+  // Auto-load files when vault path changes (including on mount)
+  createEffect(() => {
+    if (props.vaultPath) {
+      loadFiles(props.vaultPath);
+    }
+  });
+
+  const toggleFolder = (path: string) => {
+    const expanded = new Set(expandedFolders());
+    if (expanded.has(path)) {
+      expanded.delete(path);
+    } else {
+      expanded.add(path);
+    }
+    setExpandedFolders(expanded);
+    setAllCollapsed(false);
+  };
+
+  const collapseAll = () => {
+    setExpandedFolders(new Set());
+    setAllCollapsed(true);
+  };
+
+  const toggleSortOrder = () => {
+    setSortOrder(sortOrder() === 'name' ? 'modified' : 'name');
+  };
+
+  const handleContextMenu = (e: MouseEvent, path: string, isDir: boolean) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, path, isDir });
+  };
+
+  const closeContextMenu = () => {
+    setContextMenu(null);
+  };
+
+  const handleCreateFile = async (parentPath: string) => {
+    setIsCreating({ parentPath, type: 'file' });
+    setNewItemName('');
+    closeContextMenu();
+  };
+
+  const handleCreateFolder = async (parentPath: string) => {
+    setIsCreating({ parentPath, type: 'folder' });
+    setNewItemName('');
+    closeContextMenu();
+  };
+
+  const confirmCreate = async () => {
+    const creating = isCreating();
+    if (!creating || !newItemName()) return;
+
+    const fullPath = `${creating.parentPath}/${newItemName()}${creating.type === 'file' && !newItemName().endsWith('.md') ? '.md' : ''}`;
+
+    try {
+      if (creating.type === 'file') {
+        await invoke('create_file', { path: fullPath });
+        props.onFileCreated(fullPath);
+      } else {
+        await invoke('create_folder', { path: fullPath });
+      }
+      await refreshFiles();
+    } catch (err) {
+      console.error('Failed to create:', err);
+    }
+
+    setIsCreating(null);
+    setNewItemName('');
+  };
+
+  const handleRename = (path: string, currentName: string) => {
+    setIsRenaming(path);
+    setRenameValue(currentName);
+    closeContextMenu();
+  };
+
+  const confirmRename = async (oldPath: string) => {
+    if (!renameValue()) return;
+
+    const parentPath = oldPath.substring(0, oldPath.lastIndexOf('/'));
+    const newPath = `${parentPath}/${renameValue()}`;
+
+    try {
+      await invoke('rename_file', { oldPath, newPath });
+      await refreshFiles();
+      if (props.currentFile === oldPath) {
+        props.onFileSelect(newPath);
+      }
+    } catch (err) {
+      console.error('Failed to rename:', err);
+    }
+
+    setIsRenaming(null);
+    setRenameValue('');
+  };
+
+  const handleDelete = async (path: string) => {
+    if (!confirm(`Are you sure you want to delete this?`)) return;
+
+    try {
+      await invoke('delete_file', { path });
+      props.onFileDeleted(path);
+      await refreshFiles();
+    } catch (err) {
+      console.error('Failed to delete:', err);
+    }
+    closeContextMenu();
+  };
+
+  const handleMakeCopy = async (path: string) => {
+    const fileName = path.split('/').pop() || '';
+    const parentPath = path.substring(0, path.lastIndexOf('/'));
+    const ext = fileName.includes('.') ? fileName.substring(fileName.lastIndexOf('.')) : '';
+    const baseName = ext ? fileName.substring(0, fileName.lastIndexOf('.')) : fileName;
+    const copyName = `${baseName} copy${ext}`;
+    const destPath = `${parentPath}/${copyName}`;
+
+    try {
+      await invoke('copy_file', { source: path, dest: destPath });
+      await refreshFiles();
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+    closeContextMenu();
+  };
+
+  const handleCopyPath = async (path: string) => {
+    try {
+      await navigator.clipboard.writeText(path);
+    } catch (err) {
+      console.error('Failed to copy path:', err);
+    }
+    closeContextMenu();
+  };
+
+  const handleOpenInDefaultApp = async (path: string) => {
+    try {
+      await invoke('open_in_default_app', { path });
+    } catch (err) {
+      console.error('Failed to open in default app:', err);
+    }
+    closeContextMenu();
+  };
+
+  const handleShowInFolder = async (path: string) => {
+    try {
+      await invoke('show_in_folder', { path });
+    } catch (err) {
+      console.error('Failed to show in folder:', err);
+    }
+    closeContextMenu();
+  };
+
+  const handleMoveTo = async (sourcePath: string) => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: 'Move to...',
+      });
+
+      if (selected && typeof selected === 'string') {
+        const fileName = sourcePath.split('/').pop();
+        const destPath = `${selected}/${fileName}`;
+        await invoke('rename_file', { oldPath: sourcePath, newPath: destPath });
+        await refreshFiles();
+
+        if (props.currentFile === sourcePath) {
+          props.onFileSelect(destPath);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to move:', err);
+    }
+    closeContextMenu();
+  };
+
+  // Drag and drop handlers
+  const handleDragStart = (e: DragEvent, path: string) => {
+    setDraggedItem(path);
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', path);
+    }
+  };
+
+  const handleDragEnd = () => {
+    setDraggedItem(null);
+    setDropTarget(null);
+  };
+
+  const handleDragOver = (e: DragEvent, targetPath: string, isDir: boolean) => {
+    e.preventDefault();
+    const dragged = draggedItem();
+    if (!dragged) return;
+
+    // Can only drop on directories
+    if (!isDir) return;
+
+    // Can't drop on itself or its children
+    if (targetPath === dragged || targetPath.startsWith(dragged + '/')) return;
+
+    // Can't drop on its current parent
+    const draggedParent = dragged.substring(0, dragged.lastIndexOf('/'));
+    if (targetPath === draggedParent) return;
+
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'move';
+    }
+    setDropTarget(targetPath);
+  };
+
+  const handleDragLeave = (e: DragEvent) => {
+    // Only clear if leaving the element entirely
+    const relatedTarget = e.relatedTarget as HTMLElement;
+    if (!relatedTarget || !e.currentTarget.contains(relatedTarget)) {
+      setDropTarget(null);
+    }
+  };
+
+  const handleDrop = async (e: DragEvent, targetPath: string) => {
+    e.preventDefault();
+    const sourcePath = draggedItem();
+    if (!sourcePath) return;
+
+    const fileName = sourcePath.split('/').pop();
+    const newPath = `${targetPath}/${fileName}`;
+
+    // Don't move to same location
+    if (sourcePath === newPath) {
+      setDraggedItem(null);
+      setDropTarget(null);
+      return;
+    }
+
+    try {
+      await invoke('rename_file', { oldPath: sourcePath, newPath });
+      await refreshFiles();
+
+      // Update current file reference if it was moved
+      if (props.currentFile === sourcePath) {
+        props.onFileSelect(newPath);
+      }
+    } catch (err) {
+      console.error('Failed to move file:', err);
+    }
+
+    setDraggedItem(null);
+    setDropTarget(null);
+  };
+
+  const handleDropOnRoot = async (e: DragEvent) => {
+    e.preventDefault();
+    if (!props.vaultPath) return;
+
+    const sourcePath = draggedItem();
+    if (!sourcePath) return;
+
+    const fileName = sourcePath.split('/').pop();
+    const newPath = `${props.vaultPath}/${fileName}`;
+
+    // Don't move if already in root
+    const sourceParent = sourcePath.substring(0, sourcePath.lastIndexOf('/'));
+    if (sourceParent === props.vaultPath) {
+      setDraggedItem(null);
+      setDropTarget(null);
+      return;
+    }
+
+    try {
+      await invoke('rename_file', { oldPath: sourcePath, newPath });
+      await refreshFiles();
+
+      if (props.currentFile === sourcePath) {
+        props.onFileSelect(newPath);
+      }
+    } catch (err) {
+      console.error('Failed to move file:', err);
+    }
+
+    setDraggedItem(null);
+    setDropTarget(null);
+  };
+
+  // Search functionality
+  const performSearch = async (query: string) => {
+    if (!query.trim() || !props.vaultPath) {
+      setSearchResults([]);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      const results = await invoke<SearchResult[]>('search_files', {
+        path: props.vaultPath,
+        query: query.trim(),
+      });
+      setSearchResults(results);
+    } catch (err) {
+      console.error('Search failed:', err);
+      setSearchResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  // Debounced search
+  let searchTimeout: number | null = null;
+  const handleSearchInput = (value: string) => {
+    setSearchQuery(value);
+    if (searchTimeout) clearTimeout(searchTimeout);
+    searchTimeout = window.setTimeout(() => {
+      performSearch(value);
+    }, 300);
+  };
+
+  const FileTreeItem: Component<{ entry: FileEntry; depth: number }> = (itemProps) => {
+    const isExpanded = () => expandedFolders().has(itemProps.entry.path);
+    const isActive = () => props.currentFile === itemProps.entry.path;
+    const isBeingRenamed = () => isRenaming() === itemProps.entry.path;
+    const isDragging = () => draggedItem() === itemProps.entry.path;
+    const isDropTarget = () => dropTarget() === itemProps.entry.path;
+
+    return (
+      <>
+        <div
+          class={`file-tree-item ${itemProps.entry.isDirectory ? 'folder' : ''} ${isActive() ? 'active' : ''} ${isDragging() ? 'dragging' : ''} ${isDropTarget() ? 'drop-target' : ''}`}
+          style={{ 'padding-left': `${16 + itemProps.depth * 16}px` }}
+          draggable={!isBeingRenamed()}
+          onDragStart={(e) => handleDragStart(e, itemProps.entry.path)}
+          onDragEnd={handleDragEnd}
+          onDragOver={(e) => handleDragOver(e, itemProps.entry.path, itemProps.entry.isDirectory)}
+          onDragLeave={handleDragLeave}
+          onDrop={(e) => handleDrop(e, itemProps.entry.path)}
+          onClick={() => {
+            if (itemProps.entry.isDirectory) {
+              toggleFolder(itemProps.entry.path);
+            } else if (!isBeingRenamed()) {
+              props.onFileSelect(itemProps.entry.path);
+            }
+          }}
+          onContextMenu={(e) => handleContextMenu(e, itemProps.entry.path, itemProps.entry.isDirectory)}
+        >
+          <span>{itemProps.entry.isDirectory ? (isExpanded() ? '▼' : '▶') : '📄'}</span>
+          <Show
+            when={!isBeingRenamed()}
+            fallback={
+              <input
+                type="text"
+                class="rename-input"
+                value={renameValue()}
+                onInput={(e) => setRenameValue(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') confirmRename(itemProps.entry.path);
+                  if (e.key === 'Escape') setIsRenaming(null);
+                }}
+                onBlur={() => confirmRename(itemProps.entry.path)}
+                autofocus
+                onClick={(e) => e.stopPropagation()}
+              />
+            }
+          >
+            <span>{itemProps.entry.name}</span>
+          </Show>
+        </div>
+        <Show when={itemProps.entry.isDirectory && isExpanded()}>
+          <Show when={isCreating()?.parentPath === itemProps.entry.path}>
+            <div class="file-tree-item new-item" style={{ 'padding-left': `${16 + (itemProps.depth + 1) * 16}px` }}>
+              <span>{isCreating()?.type === 'folder' ? '📁' : '📄'}</span>
+              <input
+                type="text"
+                class="rename-input"
+                placeholder={isCreating()?.type === 'folder' ? 'folder name' : 'filename.md'}
+                value={newItemName()}
+                onInput={(e) => setNewItemName(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') confirmCreate();
+                  if (e.key === 'Escape') setIsCreating(null);
+                }}
+                onBlur={() => {
+                  if (newItemName()) confirmCreate();
+                  else setIsCreating(null);
+                }}
+                autofocus
+              />
+            </div>
+          </Show>
+          <For each={itemProps.entry.children}>
+            {(child) => <FileTreeItem entry={child} depth={itemProps.depth + 1} />}
+          </For>
+        </Show>
+      </>
+    );
+  };
+
+  // Close menus when clicking elsewhere
+  if (typeof document !== 'undefined') {
+    document.addEventListener('click', (e) => {
+      closeContextMenu();
+      // Close vault menu if clicking outside of it
+      const target = e.target as HTMLElement;
+      if (!target.closest('.vault-name-btn') && !target.closest('.vault-menu')) {
+        setShowVaultMenu(false);
+      }
+    });
+  }
+
+  const viewTitle = () => {
+    switch (props.view) {
+      case 'files': return props.vaultPath ? props.vaultPath.split('/').pop() : 'No Vault Open';
+      case 'search': return 'Search';
+      case 'bookmarks': return 'Bookmarks';
+    }
+  };
+
+  const handleSwitchVault = async () => {
+    setShowVaultMenu(false);
+    await openVault();
+  };
+
+  return (
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <Show when={props.view === 'files' && props.vaultPath}>
+          <button
+            class="vault-name-btn"
+            onClick={() => setShowVaultMenu(!showVaultMenu())}
+            title="Vault options"
+          >
+            <span>{viewTitle()}</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </button>
+          {/* Vault Menu Dropdown */}
+          <Show when={showVaultMenu()}>
+            <div class="vault-menu">
+              <div class="context-menu-item" onClick={handleSwitchVault}>
+                Open another vault
+              </div>
+              <div class="context-menu-item" onClick={() => {
+                handleShowInFolder(props.vaultPath!);
+                setShowVaultMenu(false);
+              }}>
+                Open vault folder
+              </div>
+              <div class="context-menu-divider" />
+              <div class="context-menu-item" onClick={() => {
+                handleCopyPath(props.vaultPath!);
+                setShowVaultMenu(false);
+              }}>
+                Copy vault path
+              </div>
+            </div>
+          </Show>
+        </Show>
+        <Show when={props.view !== 'files' || !props.vaultPath}>
+          <span>{viewTitle()}</span>
+        </Show>
+        {/* Files View Header Actions */}
+        <Show when={props.vaultPath && props.view === 'files'}>
+          <div class="sidebar-header-actions">
+            <button
+              class="header-btn"
+              onClick={() => handleCreateFile(props.vaultPath!)}
+              title="New Note"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="12" y1="18" x2="12" y2="12"/>
+                <line x1="9" y1="15" x2="15" y2="15"/>
+              </svg>
+            </button>
+            <button
+              class="header-btn"
+              onClick={() => handleCreateFolder(props.vaultPath!)}
+              title="New Folder"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                <line x1="12" y1="11" x2="12" y2="17"/>
+                <line x1="9" y1="14" x2="15" y2="14"/>
+              </svg>
+            </button>
+            <button
+              class="header-btn"
+              onClick={toggleSortOrder}
+              title={`Sort by ${sortOrder() === 'name' ? 'Modified' : 'Name'}`}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 6h18"/>
+                <path d="M6 12h12"/>
+                <path d="M9 18h6"/>
+              </svg>
+            </button>
+            <button
+              class="header-btn"
+              onClick={collapseAll}
+              title="Collapse All"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="4 14 10 14 10 20"/>
+                <polyline points="20 10 14 10 14 4"/>
+                <line x1="14" y1="10" x2="21" y2="3"/>
+                <line x1="3" y1="21" x2="10" y2="14"/>
+              </svg>
+            </button>
+          </div>
+        </Show>
+        {/* Bookmarks View Header Actions */}
+        <Show when={props.view === 'bookmarks'}>
+          <div class="sidebar-header-actions">
+            <button
+              class="header-btn"
+              onClick={() => {
+                const currentFile = props.currentFile;
+                if (currentFile) {
+                  props.onToggleBookmark(currentFile);
+                }
+              }}
+              title="Bookmark Active Tab"
+              disabled={!props.currentFile}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>
+                <line x1="12" y1="7" x2="12" y2="13"/>
+                <line x1="9" y1="10" x2="15" y2="10"/>
+              </svg>
+            </button>
+          </div>
+        </Show>
+      </div>
+
+      {/* Files View */}
+      <Show when={props.view === 'files'}>
+        <div
+          class={`sidebar-content ${dropTarget() === props.vaultPath ? 'drop-target' : ''}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            const dragged = draggedItem();
+            if (!dragged || !props.vaultPath) return;
+            const draggedParent = dragged.substring(0, dragged.lastIndexOf('/'));
+            if (draggedParent === props.vaultPath) return;
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+            setDropTarget(props.vaultPath);
+          }}
+          onDragLeave={(e) => {
+            const relatedTarget = e.relatedTarget as HTMLElement;
+            if (!relatedTarget || !e.currentTarget.contains(relatedTarget)) {
+              if (dropTarget() === props.vaultPath) setDropTarget(null);
+            }
+          }}
+          onDrop={handleDropOnRoot}
+        >
+          <Show
+            when={props.vaultPath}
+            fallback={
+              <div style={{ padding: '16px', 'text-align': 'center' }}>
+                <button class="open-vault-btn" onClick={openVault}>
+                  Open Vault
+                </button>
+              </div>
+            }
+          >
+            <Show when={isCreating()?.parentPath === props.vaultPath}>
+              <div class="file-tree-item new-item" style={{ 'padding-left': '16px' }}>
+                <span>{isCreating()?.type === 'folder' ? '📁' : '📄'}</span>
+                <input
+                  type="text"
+                  class="rename-input"
+                  placeholder={isCreating()?.type === 'folder' ? 'folder name' : 'filename.md'}
+                  value={newItemName()}
+                  onInput={(e) => setNewItemName(e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') confirmCreate();
+                    if (e.key === 'Escape') setIsCreating(null);
+                  }}
+                  onBlur={() => {
+                    if (newItemName()) confirmCreate();
+                    else setIsCreating(null);
+                  }}
+                  autofocus
+                />
+              </div>
+            </Show>
+            <For each={files()}>
+              {(entry) => <FileTreeItem entry={entry} depth={0} />}
+            </For>
+          </Show>
+        </div>
+      </Show>
+
+      {/* Search View */}
+      <Show when={props.view === 'search'}>
+        <div class="sidebar-content">
+          <div class="sidebar-search">
+            <input
+              type="text"
+              class="sidebar-search-input"
+              placeholder="Search in files..."
+              value={searchQuery()}
+              onInput={(e) => handleSearchInput(e.currentTarget.value)}
+            />
+          </div>
+          <Show when={isSearching()}>
+            <div class="sidebar-message">Searching...</div>
+          </Show>
+          <Show when={!isSearching() && searchQuery() && searchResults().length === 0}>
+            <div class="sidebar-message">No results found</div>
+          </Show>
+          <Show when={!isSearching() && searchResults().length > 0}>
+            <For each={searchResults()}>
+              {(result) => (
+                <div class="search-result-item">
+                  <div
+                    class="search-result-file"
+                    onClick={() => props.onFileSelect(result.path)}
+                  >
+                    📄 {result.name}
+                  </div>
+                  <For each={result.matches.slice(0, 3)}>
+                    {(match) => (
+                      <div
+                        class="search-result-match"
+                        onClick={() => props.onFileSelect(result.path)}
+                      >
+                        <span class="match-line">{match.line}</span>
+                        <span class="match-content">{match.content}</span>
+                      </div>
+                    )}
+                  </For>
+                </div>
+              )}
+            </For>
+          </Show>
+          <Show when={!searchQuery()}>
+            <div class="sidebar-message">Type to search in all files</div>
+          </Show>
+        </div>
+      </Show>
+
+      {/* Bookmarks View */}
+      <Show when={props.view === 'bookmarks'}>
+        <div class="sidebar-content">
+          <Show when={props.bookmarks.length === 0}>
+            <div class="sidebar-message">No bookmarks yet. Right-click a file to bookmark it.</div>
+          </Show>
+          <For each={props.bookmarks}>
+            {(path) => (
+              <div
+                class={`file-tree-item ${props.currentFile === path ? 'active' : ''}`}
+                onClick={() => props.onFileSelect(path)}
+              >
+                <span>🔖</span>
+                <span>{path.split('/').pop()}</span>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
+
+      {/* Context Menu */}
+      <Show when={contextMenu()}>
+        <div
+          class="context-menu"
+          style={{ left: `${contextMenu()!.x}px`, top: `${contextMenu()!.y}px` }}
+        >
+          {/* File-specific options */}
+          <Show when={!contextMenu()!.isDir}>
+            <div class="context-menu-item" onClick={() => {
+              props.onFileSelect(contextMenu()!.path);
+              closeContextMenu();
+            }}>
+              Open in new tab
+            </div>
+            <div class="context-menu-divider" />
+          </Show>
+
+          {/* Folder-specific options */}
+          <Show when={contextMenu()!.isDir}>
+            <div class="context-menu-item" onClick={() => handleCreateFile(contextMenu()!.path)}>
+              New note
+            </div>
+            <div class="context-menu-item" onClick={() => handleCreateFolder(contextMenu()!.path)}>
+              New folder
+            </div>
+            <div class="context-menu-divider" />
+          </Show>
+
+          {/* Common options */}
+          <div class="context-menu-item" onClick={() => handleMakeCopy(contextMenu()!.path)}>
+            Make a copy
+          </div>
+          <div class="context-menu-item" onClick={() => handleMoveTo(contextMenu()!.path)}>
+            Move {contextMenu()!.isDir ? 'folder' : 'file'} to...
+          </div>
+          <div
+            class="context-menu-item"
+            onClick={() => {
+              props.onToggleBookmark(contextMenu()!.path);
+              closeContextMenu();
+            }}
+          >
+            {props.bookmarks.includes(contextMenu()!.path) ? 'Remove bookmark' : 'Bookmark'}
+          </div>
+
+          <div class="context-menu-divider" />
+
+          <div class="context-menu-item" onClick={() => handleCopyPath(contextMenu()!.path)}>
+            Copy path
+          </div>
+          <Show when={!contextMenu()!.isDir}>
+            <div class="context-menu-item" onClick={() => handleOpenInDefaultApp(contextMenu()!.path)}>
+              Open in default app
+            </div>
+          </Show>
+          <div class="context-menu-item" onClick={() => handleShowInFolder(contextMenu()!.path)}>
+            Show in system explorer
+          </div>
+
+          <div class="context-menu-divider" />
+
+          <div class="context-menu-item" onClick={() => handleRename(contextMenu()!.path, contextMenu()!.path.split('/').pop()!)}>
+            Rename
+          </div>
+          <div class="context-menu-item danger" onClick={() => handleDelete(contextMenu()!.path)}>
+            Delete
+          </div>
+        </div>
+      </Show>
+    </aside>
+  );
+};
+
+export default Sidebar;
