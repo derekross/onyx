@@ -12,7 +12,7 @@ interface FileEntry {
 type SidebarView = 'files' | 'search' | 'bookmarks';
 
 interface SidebarProps {
-  onFileSelect: (path: string) => void;
+  onFileSelect: (path: string, line?: number) => void;
   currentFile: string | null;
   vaultPath: string | null;
   onVaultOpen: (path: string) => void;
@@ -21,8 +21,11 @@ interface SidebarProps {
   view: SidebarView;
   bookmarks: string[];
   onToggleBookmark: (path: string) => void;
+  savedSearches: string[];
+  onToggleSavedSearch: (query: string) => void;
   exposeCreateNote?: (fn: () => void) => void;
   exposeRefresh?: (fn: () => void) => void;
+  exposeSearchQuery?: (fn: (query: string) => void) => void;
 }
 
 interface SearchResult {
@@ -161,6 +164,16 @@ const Sidebar: Component<SidebarProps> = (props) => {
   // Expose the refresh function to parent
   if (props.exposeRefresh) {
     props.exposeRefresh(refreshFiles);
+  }
+
+  // Expose the search query function to parent (for hashtag clicks)
+  const setSearchQueryAndSearch = (query: string) => {
+    setSearchQuery(query);
+    performSearch(query);
+  };
+
+  if (props.exposeSearchQuery) {
+    props.exposeSearchQuery(setSearchQueryAndSearch);
   }
 
   const confirmCreate = async () => {
@@ -726,6 +739,17 @@ const Sidebar: Component<SidebarProps> = (props) => {
               value={searchQuery()}
               onInput={(e) => handleSearchInput(e.currentTarget.value)}
             />
+            <Show when={searchQuery().trim()}>
+              <button
+                class={`search-save-btn ${props.savedSearches.includes(searchQuery().trim()) ? 'saved' : ''}`}
+                onClick={() => props.onToggleSavedSearch(searchQuery().trim())}
+                title={props.savedSearches.includes(searchQuery().trim()) ? 'Remove saved search' : 'Save this search'}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill={props.savedSearches.includes(searchQuery().trim()) ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2">
+                  <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>
+                </svg>
+              </button>
+            </Show>
           </div>
           <Show when={isSearching()}>
             <div class="sidebar-message">Searching...</div>
@@ -747,7 +771,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
                     {(match) => (
                       <div
                         class="search-result-match"
-                        onClick={() => props.onFileSelect(result.path)}
+                        onClick={() => props.onFileSelect(result.path, match.line)}
                       >
                         <span class="match-line">{match.line}</span>
                         <span class="match-content">{match.content}</span>
@@ -767,20 +791,65 @@ const Sidebar: Component<SidebarProps> = (props) => {
       {/* Bookmarks View */}
       <Show when={props.view === 'bookmarks'}>
         <div class="sidebar-content">
-          <Show when={props.bookmarks.length === 0}>
-            <div class="sidebar-message">No bookmarks yet. Right-click a file to bookmark it.</div>
+          <Show when={props.bookmarks.length === 0 && props.savedSearches.length === 0}>
+            <div class="sidebar-message">No bookmarks yet. Right-click a file to bookmark it, or save a search.</div>
           </Show>
-          <For each={props.bookmarks}>
-            {(path) => (
-              <div
-                class={`file-tree-item ${props.currentFile === path ? 'active' : ''}`}
-                onClick={() => props.onFileSelect(path)}
-              >
-                <span>🔖</span>
-                <span>{path.split('/').pop()}</span>
-              </div>
-            )}
-          </For>
+
+          {/* Saved Searches */}
+          <Show when={props.savedSearches.length > 0}>
+            <div class="bookmark-section">
+              <div class="bookmark-section-title">Saved Searches</div>
+              <For each={props.savedSearches}>
+                {(query) => (
+                  <div
+                    class="file-tree-item saved-search"
+                    onClick={() => {
+                      setSearchQueryAndSearch(query);
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="11" cy="11" r="8"></circle>
+                      <path d="m21 21-4.35-4.35"></path>
+                    </svg>
+                    <span>{query}</span>
+                    <button
+                      class="bookmark-remove-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        props.onToggleSavedSearch(query);
+                      }}
+                      title="Remove saved search"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                      </svg>
+                    </button>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
+
+          {/* File Bookmarks */}
+          <Show when={props.bookmarks.length > 0}>
+            <div class="bookmark-section">
+              <Show when={props.savedSearches.length > 0}>
+                <div class="bookmark-section-title">Files</div>
+              </Show>
+              <For each={props.bookmarks}>
+                {(path) => (
+                  <div
+                    class={`file-tree-item ${props.currentFile === path ? 'active' : ''}`}
+                    onClick={() => props.onFileSelect(path)}
+                  >
+                    <span>🔖</span>
+                    <span>{path.split('/').pop()}</span>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
         </div>
       </Show>
 

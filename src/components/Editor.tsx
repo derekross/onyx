@@ -1,10 +1,11 @@
 import { Component, onCleanup, Show, createSignal, createEffect, on } from 'solid-js';
-import { Editor, rootCtx, defaultValueCtx } from '@milkdown/core';
+import { Editor, rootCtx, defaultValueCtx, editorViewCtx } from '@milkdown/core';
 import { commonmark } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
 import { nord } from '@milkdown/theme-nord';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
 import { invoke } from '@tauri-apps/api/core';
+import { hashtagPlugin, setHashtagClickHandler } from '../lib/hashtagPlugin';
 
 import '@milkdown/theme-nord/style.css';
 
@@ -14,6 +15,9 @@ interface EditorProps {
   filePath: string | null;
   vaultPath: string | null;
   onCreateFile?: () => void;
+  onHashtagClick?: (tag: string) => void;
+  scrollToLine?: number | null;
+  onScrollComplete?: () => void;
 }
 
 const MilkdownEditor: Component<EditorProps> = (props) => {
@@ -44,6 +48,9 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       editorInstance = null;
     }
 
+    // Set up hashtag click handler
+    setHashtagClickHandler(props.onHashtagClick || null);
+
     editorInstance = await Editor.make()
       .config((ctx) => {
         ctx.set(rootCtx, container);
@@ -53,6 +60,7 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       .use(commonmark)
       .use(gfm)
       .use(listener)
+      .use(hashtagPlugin)
       // Configure listener after the plugin is loaded
       .config((ctx) => {
         ctx.get(listenerCtx).markdownUpdated((ctx, markdown, prevMarkdown) => {
@@ -82,35 +90,104 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
     }
   };
 
+  // Helper function to scroll to a line
+  const scrollToLineNumber = (line: number) => {
+    if (!editorInstance) return;
+
+    try {
+      const ctx = editorInstance.ctx;
+      if (!ctx) return;
+
+      const view = ctx.get(editorViewCtx);
+      const doc = view.state.doc;
+
+      // Calculate character position at the start of target line
+      const content = props.content || '';
+      const lines = content.split('\n');
+
+      let charPos = 0;
+      for (let i = 0; i < Math.min(line - 1, lines.length); i++) {
+        charPos += lines[i].length + 1; // +1 for newline
+      }
+
+      // Find the closest position in the doc
+      let targetPos = Math.min(charPos, doc.content.size - 1);
+
+      // Resolve to a valid position
+      const resolvedPos = doc.resolve(Math.max(0, targetPos));
+
+      // Find the DOM element at this position and scroll to it
+      if (resolvedPos.pos >= 0) {
+        const domInfo = view.domAtPos(resolvedPos.pos);
+
+        if (domInfo.node) {
+          let element: Element | null = null;
+          if (domInfo.node instanceof Element) {
+            element = domInfo.node;
+          } else if (domInfo.node.parentElement) {
+            element = domInfo.node.parentElement;
+          }
+
+          // Find the nearest block-level parent
+          while (element && !['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'PRE', 'BLOCKQUOTE', 'DIV'].includes(element.tagName)) {
+            element = element.parentElement;
+          }
+
+          if (element) {
+            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }
+      }
+
+      // Clear the scroll target
+      props.onScrollComplete?.();
+    } catch (err) {
+      console.error('Failed to scroll to line:', err);
+    }
+  };
+
   // Watch for file path changes (tab switches)
   createEffect(
     on(
       () => props.filePath,
       async (filePath, prevPath) => {
-        console.log('Effect triggered:', {
-          filePath,
-          prevPath,
-          currentPath: currentPath(),
-          hasContainerRef: !!containerRef,
-          hasEditor: !!editorInstance
-        });
-
         if (filePath && filePath !== currentPath() && containerRef) {
-          console.log('Switching to file:', filePath, 'content length:', props.content?.length);
           setCurrentPath(filePath);
 
           // Always recreate editor on tab switch for reliability
           // Destroy existing instance first
           if (editorInstance) {
-            console.log('Destroying old editor');
             await editorInstance.destroy();
             editorInstance = null;
           }
 
           // Create fresh editor with new content
-          console.log('Creating new editor with content:', props.content?.substring(0, 50));
           await createEditor(containerRef, props.content);
-          console.log('Editor created successfully');
+
+          // After editor is ready, scroll to line if specified
+          if (props.scrollToLine) {
+            // Give the editor a moment to fully render
+            setTimeout(() => {
+              scrollToLineNumber(props.scrollToLine!);
+            }, 100);
+          }
+        }
+      }
+    )
+  );
+
+  // Handle scroll to line (for when file is already open)
+  createEffect(
+    on(
+      () => props.scrollToLine,
+      (line) => {
+        // Only handle if we have a line to scroll to and an editor that's ready
+        // The filePath effect handles scrolling when opening a new file
+        if (line && editorInstance && props.filePath === currentPath()) {
+          // Small delay to ensure the view is stable
+          setTimeout(() => {
+            scrollToLineNumber(line);
+          }, 50);
         }
       }
     )

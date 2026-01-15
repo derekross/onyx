@@ -38,12 +38,20 @@ const App: Component = () => {
   const [sidebarWidth, setSidebarWidth] = createSignal(260);
   let createNoteFromSidebar: (() => void) | null = null;
   let refreshSidebar: (() => void) | null = null;
+  let setSearchQuery: ((query: string) => void) | null = null;
+  const [scrollToLine, setScrollToLine] = createSignal<number | null>(null);
   const [isResizing, setIsResizing] = createSignal<'sidebar' | 'terminal' | null>(null);
   const [resizeStartX, setResizeStartX] = createSignal(0);
   const [resizeStartWidth, setResizeStartWidth] = createSignal(0);
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false);
   const [sidebarView, setSidebarView] = createSignal<SidebarView>('files');
-  const [bookmarks, setBookmarks] = createSignal<string[]>([]);
+  // TODO: Sync bookmarks and saved searches via Nostr (encrypted user preferences)
+  const [bookmarks, setBookmarks] = createSignal<string[]>(
+    JSON.parse(localStorage.getItem('bookmarks') || '[]')
+  );
+  const [savedSearches, setSavedSearches] = createSignal<string[]>(
+    JSON.parse(localStorage.getItem('savedSearches') || '[]')
+  );
 
   // Close tab confirmation modal
   const [closeTabConfirm, setCloseTabConfirm] = createSignal<{ index: number; name: string } | null>(null);
@@ -137,11 +145,15 @@ const App: Component = () => {
   // Sync status for status bar
   const [syncStatus, setSyncStatus] = createSignal<'off' | 'idle' | 'syncing' | 'error'>('off');
 
-  const openFile = async (path: string) => {
+  const openFile = async (path: string, line?: number) => {
     // Check if already open
     const existingIndex = tabs().findIndex(t => t.path === path);
     if (existingIndex >= 0) {
       setActiveTabIndex(existingIndex);
+      // If line specified, scroll to it even if file is already open
+      if (line) {
+        setScrollToLine(line);
+      }
       return;
     }
 
@@ -152,6 +164,11 @@ const App: Component = () => {
 
       setTabs([...tabs(), { path, name, content, isDirty: false }]);
       setActiveTabIndex(tabs().length); // Will be the new last index after state updates
+
+      // Set line to scroll to after editor loads
+      if (line) {
+        setScrollToLine(line);
+      }
     } catch (err) {
       console.error('Failed to open file:', err);
     }
@@ -285,10 +302,35 @@ const App: Component = () => {
 
   const toggleBookmark = (path: string) => {
     const current = bookmarks();
+    let updated: string[];
     if (current.includes(path)) {
-      setBookmarks(current.filter(p => p !== path));
+      updated = current.filter(p => p !== path);
     } else {
-      setBookmarks([...current, path]);
+      updated = [...current, path];
+    }
+    setBookmarks(updated);
+    localStorage.setItem('bookmarks', JSON.stringify(updated));
+  };
+
+  const toggleSavedSearch = (query: string) => {
+    const current = savedSearches();
+    let updated: string[];
+    if (current.includes(query)) {
+      updated = current.filter(q => q !== query);
+    } else {
+      updated = [...current, query];
+    }
+    setSavedSearches(updated);
+    localStorage.setItem('savedSearches', JSON.stringify(updated));
+  };
+
+  // Handle hashtag clicks from editor
+  const handleHashtagClick = (tag: string) => {
+    // Switch to search view
+    switchSidebarView('search');
+    // Set search query with tag: prefix
+    if (setSearchQuery) {
+      setSearchQuery(`#${tag}`);
     }
   };
 
@@ -537,8 +579,11 @@ const App: Component = () => {
             view={sidebarView()}
             bookmarks={bookmarks()}
             onToggleBookmark={toggleBookmark}
+            savedSearches={savedSearches()}
+            onToggleSavedSearch={toggleSavedSearch}
             exposeCreateNote={(fn) => { createNoteFromSidebar = fn; }}
             exposeRefresh={(fn) => { refreshSidebar = fn; }}
+            exposeSearchQuery={(fn) => { setSearchQuery = fn; }}
           />
         </div>
         <div
@@ -590,6 +635,9 @@ const App: Component = () => {
               filePath={currentTab()?.path || null}
               vaultPath={vaultPath()}
               onCreateFile={createNewNote}
+              onHashtagClick={handleHashtagClick}
+              scrollToLine={scrollToLine()}
+              onScrollComplete={() => setScrollToLine(null)}
             />
           </div>
 
