@@ -1,4 +1,4 @@
-import { Component, createSignal, createEffect, For, Show, onMount } from 'solid-js';
+import { Component, createSignal, createEffect, For, Show, onMount, onCleanup } from 'solid-js';
 import Sidebar from './components/Sidebar';
 import Editor from './components/Editor';
 import QuickSwitcher from './components/QuickSwitcher';
@@ -7,6 +7,7 @@ import SearchPanel from './components/SearchPanel';
 import OpenCodeTerminal from './components/OpenCodeTerminal';
 import Settings from './components/Settings';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getSyncEngine, getCurrentLogin, getIdentityFromLogin } from './lib/nostr';
 
 interface Tab {
@@ -46,23 +47,58 @@ const App: Component = () => {
   // Auto-save timer
   let autoSaveTimeout: number | null = null;
 
+  // Debounce timer for file watcher
+  let fileChangeDebounce: number | null = null;
+
   // Load settings on startup
-  onMount(async () => {
-    try {
-      const settings = await invoke<AppSettings>('load_settings');
+  onMount(() => {
+    // Load settings asynchronously
+    invoke<AppSettings>('load_settings').then(settings => {
       if (settings.vault_path) {
         setVaultPath(settings.vault_path);
       }
       if (settings.show_terminal) {
         setShowTerminal(true);
       }
-    } catch (err) {
+    }).catch(err => {
       console.error('Failed to load settings:', err);
-    }
+    });
 
     // Initialize sync status from localStorage
     const syncEnabled = localStorage.getItem('sync_enabled') === 'true';
     setSyncStatus(syncEnabled ? 'idle' : 'off');
+
+    // Set up file change listener
+    let unlistenFn: (() => void) | null = null;
+
+    listen('files-changed', () => {
+      // Debounce refreshes to avoid too many updates
+      if (fileChangeDebounce) {
+        clearTimeout(fileChangeDebounce);
+      }
+      fileChangeDebounce = window.setTimeout(() => {
+        refreshSidebar?.();
+        fileChangeDebounce = null;
+      }, 500);
+    }).then(unlisten => {
+      unlistenFn = unlisten;
+    });
+
+    // Cleanup must be registered synchronously
+    onCleanup(() => {
+      unlistenFn?.();
+      invoke('stop_watching').catch(() => {});
+    });
+  });
+
+  // Start/stop file watcher when vault path changes
+  createEffect(() => {
+    const path = vaultPath();
+    if (path) {
+      invoke('start_watching', { path }).catch(console.error);
+    } else {
+      invoke('stop_watching').catch(() => {});
+    }
   });
 
   // Save settings when vault path changes

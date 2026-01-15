@@ -5,11 +5,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 use walkdir::WalkDir;
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tauri::{AppHandle, Emitter};
 use keyring::Entry;
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher, EventKind};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AppSettings {
@@ -511,6 +513,73 @@ fn kill_pty(state: tauri::State<'_, SharedPtyState>, session_id: String) -> Resu
     }
 }
 
+// File watcher for detecting changes
+struct WatcherState {
+    watcher: Option<RecommendedWatcher>,
+}
+
+impl Default for WatcherState {
+    fn default() -> Self {
+        Self { watcher: None }
+    }
+}
+
+type SharedWatcherState = Arc<Mutex<WatcherState>>;
+
+#[tauri::command]
+fn start_watching(
+    app: AppHandle,
+    state: tauri::State<'_, SharedWatcherState>,
+    path: String,
+) -> Result<(), String> {
+    let mut watcher_state = state.lock();
+
+    // Stop existing watcher if any
+    watcher_state.watcher = None;
+
+    let app_clone = app.clone();
+    let watcher = RecommendedWatcher::new(
+        move |res: Result<notify::Event, notify::Error>| {
+            if let Ok(event) = res {
+                // Only emit for create, modify, remove events on .md files
+                let dominated_by_md = event.paths.iter().any(|p| {
+                    p.extension().map(|e| e == "md").unwrap_or(false)
+                });
+
+                let dominated_by_dir = event.paths.iter().any(|p| p.is_dir());
+
+                if dominated_by_md || dominated_by_dir {
+                    match event.kind {
+                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
+                            let _ = app_clone.emit("files-changed", ());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        },
+        Config::default().with_poll_interval(Duration::from_secs(1)),
+    )
+    .map_err(|e| e.to_string())?;
+
+    watcher_state.watcher = Some(watcher);
+
+    // Start watching the path
+    if let Some(ref mut w) = watcher_state.watcher {
+        w.watch(Path::new(&path), RecursiveMode::Recursive)
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn stop_watching(state: tauri::State<'_, SharedWatcherState>) -> Result<(), String> {
+    let mut watcher_state = state.lock();
+    watcher_state.watcher = None;
+    Ok(())
+}
+
 // Keyring commands for secure credential storage
 const KEYRING_SERVICE: &str = "com.onyx.app";
 
@@ -546,6 +615,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(Arc::new(Mutex::new(PtyState::default())) as SharedPtyState)
+        .manage(Arc::new(Mutex::new(WatcherState::default())) as SharedWatcherState)
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -578,6 +648,8 @@ pub fn run() {
             keyring_set,
             keyring_get,
             keyring_delete,
+            start_watching,
+            stop_watching,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
