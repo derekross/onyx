@@ -1268,6 +1268,26 @@ body {
   gap: 12px;
 }
 
+.opencode-path-input {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.opencode-path-input .setting-input {
+  flex: 1;
+}
+
+.opencode-current-path {
+  word-break: break-all;
+  font-family: monospace;
+  font-size: 11px !important;
+  background: var(--bg-tertiary);
+  padding: 4px 8px;
+  border-radius: 4px;
+  margin-top: 4px;
+}
+
 .setting-info {
   flex: 1;
   min-width: 0;

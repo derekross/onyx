@@ -2,6 +2,7 @@ import { Component, createSignal, createEffect, For, Show, onMount, onCleanup } 
 import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { open } from '@tauri-apps/plugin-shell';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import QRCode from 'qrcode';
 import {
   getSyncEngine,
@@ -35,7 +36,7 @@ import {
 } from '../lib/nostr';
 import { createSignerFromLogin, type NostrSigner } from '../lib/nostr/signer';
 
-type SettingsSection = 'general' | 'editor' | 'files' | 'appearance' | 'hotkeys' | 'productivity' | 'sync' | 'nostr' | 'about';
+type SettingsSection = 'general' | 'editor' | 'files' | 'appearance' | 'hotkeys' | 'opencode' | 'productivity' | 'sync' | 'nostr' | 'about';
 type LoginTab = 'generate' | 'import' | 'connect';
 
 interface SettingsProps {
@@ -82,6 +83,7 @@ const sections: SettingsSectionItem[] = [
   { id: 'files', label: 'Files & Links', icon: 'M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z M14 2v6h6 M10 12l2 2 4-4' },
   { id: 'appearance', label: 'Appearance', icon: 'M12 2v4 M12 18v4 M4.93 4.93l2.83 2.83 M16.24 16.24l2.83 2.83 M2 12h4 M18 12h4 M4.93 19.07l2.83-2.83 M16.24 7.76l2.83-2.83' },
   { id: 'hotkeys', label: 'Hotkeys', icon: 'M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z' },
+  { id: 'opencode', label: 'OpenCode', icon: 'M8 9l3 3-3 3 M13 15h3 M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z' },
   { id: 'productivity', label: 'Productivity', icon: 'M13 2L3 14h9l-1 8 10-12h-9l1-8z' },
   { id: 'sync', label: 'Sync', icon: 'M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8 M21 3v5h-5' },
   { id: 'nostr', label: 'Nostr', icon: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z' },
@@ -146,10 +148,19 @@ const Settings: Component<SettingsProps> = (props) => {
   // App version
   const [appVersion, setAppVersion] = createSignal('...');
 
+  // OpenCode settings
+  const [openCodePath, setOpenCodePath] = createSignal<string>('');
+
   // Load saved login on mount
   onMount(async () => {
     // Get app version
     getVersion().then(setAppVersion).catch(() => setAppVersion('unknown'));
+
+    // Load OpenCode path setting
+    const savedOpenCodePath = localStorage.getItem('opencode_path');
+    if (savedOpenCodePath) {
+      setOpenCodePath(savedOpenCodePath);
+    }
 
     // Load login from secure storage
     const login = await getCurrentLogin();
@@ -833,6 +844,86 @@ const Settings: Component<SettingsProps> = (props) => {
     }
   };
 
+  // OpenCode path handlers
+  const handleBrowseOpenCode = async () => {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        title: 'Select OpenCode executable',
+      });
+
+      if (selected && typeof selected === 'string') {
+        setOpenCodePath(selected);
+        localStorage.setItem('opencode_path', selected);
+      }
+    } catch (err) {
+      console.error('Failed to open file dialog:', err);
+    }
+  };
+
+  const handleOpenCodePathChange = (path: string) => {
+    setOpenCodePath(path);
+    if (path.trim()) {
+      localStorage.setItem('opencode_path', path);
+    } else {
+      localStorage.removeItem('opencode_path');
+    }
+  };
+
+  const handleClearOpenCodePath = () => {
+    setOpenCodePath('');
+    localStorage.removeItem('opencode_path');
+  };
+
+  // Import custom skill handler
+  const handleImportSkill = async () => {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        title: 'Select skill file',
+        filters: [{
+          name: 'Skill files',
+          extensions: ['md', 'zip']
+        }]
+      });
+
+      if (selected && typeof selected === 'string') {
+        // Read the file and import it
+        const fileName = selected.split('/').pop() || selected.split('\\').pop() || 'skill';
+
+        if (selected.endsWith('.md')) {
+          // Import single SKILL.md file
+          const content = await invoke<string>('read_file', { path: selected });
+          const skillId = fileName.replace('.md', '').toLowerCase().replace(/[^a-z0-9-]/g, '-');
+          await invoke('skill_save_file', { skillId, fileName: 'SKILL.md', content });
+
+          setModalConfig({
+            type: 'info',
+            title: 'Skill imported',
+            message: `Successfully imported skill "${skillId}". Refresh the skills list to see it.`
+          });
+        } else {
+          // TODO: Handle zip import
+          setModalConfig({
+            type: 'info',
+            title: 'Not implemented',
+            message: 'ZIP import is not yet implemented. Please import a SKILL.md file directly.'
+          });
+        }
+
+        // Refresh skills list
+        loadSkillsManifest();
+      }
+    } catch (err) {
+      console.error('Failed to import skill:', err);
+      setModalConfig({
+        type: 'info',
+        title: 'Import failed',
+        message: `Failed to import skill: ${err instanceof Error ? err.message : 'Unknown error'}`
+      });
+    }
+  };
+
   return (
     <div class="settings-overlay" onClick={handleOverlayClick}>
       <div class="settings-modal">
@@ -1124,6 +1215,80 @@ const Settings: Component<SettingsProps> = (props) => {
               </div>
             </Show>
 
+            {/* OpenCode Settings */}
+            <Show when={activeSection() === 'opencode'}>
+              <div class="settings-section">
+                <div class="settings-section-title">OpenCode Configuration</div>
+
+                <div class="settings-notice">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                  </svg>
+                  <p>OpenCode is an AI coding assistant. If it's not in your system PATH, you can specify its location here.</p>
+                </div>
+
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">OpenCode binary path</div>
+                    <div class="setting-description">Leave empty to use system PATH, or specify the full path to the OpenCode executable</div>
+                  </div>
+                </div>
+
+                <div class="setting-item column">
+                  <div class="opencode-path-input">
+                    <input
+                      type="text"
+                      class="setting-input wide"
+                      placeholder="e.g., C:\Program Files\OpenCode\opencode.exe or /usr/local/bin/opencode"
+                      value={openCodePath()}
+                      onInput={(e) => handleOpenCodePathChange(e.currentTarget.value)}
+                    />
+                    <button class="setting-button" onClick={handleBrowseOpenCode}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                      </svg>
+                      Browse
+                    </button>
+                    <Show when={openCodePath()}>
+                      <button class="setting-button secondary" onClick={handleClearOpenCodePath} title="Clear path">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <line x1="18" y1="6" x2="6" y2="18"></line>
+                          <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                      </button>
+                    </Show>
+                  </div>
+                </div>
+
+                <Show when={openCodePath()}>
+                  <div class="setting-item">
+                    <div class="setting-info">
+                      <div class="setting-name">Current path</div>
+                      <div class="setting-description opencode-current-path">{openCodePath()}</div>
+                    </div>
+                  </div>
+                </Show>
+
+                <div class="settings-section-title">Installation</div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">Download OpenCode</div>
+                    <div class="setting-description">Get the latest version of OpenCode</div>
+                  </div>
+                  <button class="setting-button" onClick={() => open('https://opencode.ai/download')}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                      <polyline points="7 10 12 15 17 10"></polyline>
+                      <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    Download
+                  </button>
+                </div>
+              </div>
+            </Show>
+
             {/* Productivity Skills */}
             <Show when={activeSection() === 'productivity'}>
               <div class="settings-section">
@@ -1231,7 +1396,7 @@ const Settings: Component<SettingsProps> = (props) => {
                     <div class="setting-name">Import skill</div>
                     <div class="setting-description">Upload a SKILL.md file or .zip archive</div>
                   </div>
-                  <button class="setting-button secondary">
+                  <button class="setting-button secondary" onClick={handleImportSkill}>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                       <polyline points="17 8 12 3 7 8"></polyline>

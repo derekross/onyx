@@ -96,10 +96,14 @@ const OpenCodeTerminal: Component<OpenCodeTerminalProps> = (props) => {
     const cols = dims?.cols || 80;
     const rows = dims?.rows || 24;
 
+    // Get custom OpenCode path from settings, or use default 'opencode'
+    const customPath = localStorage.getItem('opencode_path');
+    const openCodeCommand = customPath && customPath.trim() ? customPath.trim() : 'opencode';
+
     try {
       // Spawn opencode in PTY
       const sid = await invoke<string>('spawn_pty', {
-        command: 'opencode',
+        command: openCodeCommand,
         cwd: props.vaultPath || undefined,
         cols,
         rows,
