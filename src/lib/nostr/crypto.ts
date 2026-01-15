@@ -3,10 +3,9 @@
  */
 
 import { nip44, nip19, generateSecretKey, getPublicKey } from 'nostr-tools';
-import { sha256 } from '@noble/hashes/sha256';
-import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
-import { gcm } from '@noble/ciphers/aes';
-import { randomBytes } from '@noble/ciphers/webcrypto';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils.js';
+import { gcm } from '@noble/ciphers/aes.js';
 import type { NostrIdentity, FilePayload, VaultIndexPayload } from './types';
 
 /**
