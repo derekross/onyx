@@ -90,83 +90,104 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
     }
   };
 
+  // Helper function to scroll to a line
+  const scrollToLineNumber = (line: number) => {
+    if (!editorInstance) return;
+
+    try {
+      const ctx = editorInstance.ctx;
+      if (!ctx) return;
+
+      const view = ctx.get(editorViewCtx);
+      const doc = view.state.doc;
+
+      // Calculate character position at the start of target line
+      const content = props.content || '';
+      const lines = content.split('\n');
+
+      let charPos = 0;
+      for (let i = 0; i < Math.min(line - 1, lines.length); i++) {
+        charPos += lines[i].length + 1; // +1 for newline
+      }
+
+      // Find the closest position in the doc
+      let targetPos = Math.min(charPos, doc.content.size - 1);
+
+      // Resolve to a valid position
+      const resolvedPos = doc.resolve(Math.max(0, targetPos));
+
+      // Find the DOM element at this position and scroll to it
+      if (resolvedPos.pos >= 0) {
+        const domInfo = view.domAtPos(resolvedPos.pos);
+
+        if (domInfo.node) {
+          let element: Element | null = null;
+          if (domInfo.node instanceof Element) {
+            element = domInfo.node;
+          } else if (domInfo.node.parentElement) {
+            element = domInfo.node.parentElement;
+          }
+
+          // Find the nearest block-level parent
+          while (element && !['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'PRE', 'BLOCKQUOTE', 'DIV'].includes(element.tagName)) {
+            element = element.parentElement;
+          }
+
+          if (element) {
+            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }
+      }
+
+      // Clear the scroll target
+      props.onScrollComplete?.();
+    } catch (err) {
+      console.error('Failed to scroll to line:', err);
+    }
+  };
+
   // Watch for file path changes (tab switches)
   createEffect(
     on(
       () => props.filePath,
       async (filePath, prevPath) => {
-        console.log('Effect triggered:', {
-          filePath,
-          prevPath,
-          currentPath: currentPath(),
-          hasContainerRef: !!containerRef,
-          hasEditor: !!editorInstance
-        });
-
         if (filePath && filePath !== currentPath() && containerRef) {
-          console.log('Switching to file:', filePath, 'content length:', props.content?.length);
           setCurrentPath(filePath);
 
           // Always recreate editor on tab switch for reliability
           // Destroy existing instance first
           if (editorInstance) {
-            console.log('Destroying old editor');
             await editorInstance.destroy();
             editorInstance = null;
           }
 
           // Create fresh editor with new content
-          console.log('Creating new editor with content:', props.content?.substring(0, 50));
           await createEditor(containerRef, props.content);
-          console.log('Editor created successfully');
+
+          // After editor is ready, scroll to line if specified
+          if (props.scrollToLine) {
+            // Give the editor a moment to fully render
+            setTimeout(() => {
+              scrollToLineNumber(props.scrollToLine!);
+            }, 100);
+          }
         }
       }
     )
   );
 
-  // Handle scroll to line
+  // Handle scroll to line (for when file is already open)
   createEffect(
     on(
       () => props.scrollToLine,
       (line) => {
-        if (line && editorInstance) {
-          // Give the editor a moment to render
+        // Only handle if we have a line to scroll to and an editor that's ready
+        // The filePath effect handles scrolling when opening a new file
+        if (line && editorInstance && props.filePath === currentPath()) {
+          // Small delay to ensure the view is stable
           setTimeout(() => {
-            try {
-              const ctx = editorInstance?.ctx;
-              if (!ctx) return;
-
-              const view = ctx.get(editorViewCtx);
-              const doc = view.state.doc;
-
-              // Find position of the target line
-              let pos = 0;
-              let currentLine = 1;
-
-              doc.descendants((node, nodePos) => {
-                if (currentLine >= line) return false;
-                if (node.isBlock) {
-                  currentLine++;
-                  pos = nodePos;
-                }
-                return true;
-              });
-
-              // Scroll to the position
-              const domAtPos = view.domAtPos(pos);
-              if (domAtPos.node) {
-                const element = domAtPos.node instanceof Element
-                  ? domAtPos.node
-                  : domAtPos.node.parentElement;
-                element?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              }
-
-              // Clear the scroll target
-              props.onScrollComplete?.();
-            } catch (err) {
-              console.error('Failed to scroll to line:', err);
-            }
-          }, 100);
+            scrollToLineNumber(line);
+          }, 50);
         }
       }
     )
