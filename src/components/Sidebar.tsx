@@ -51,15 +51,31 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
   const openVault = async () => {
     try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: 'Select Vault Folder',
-      });
+      // Check platform first
+      const platformInfo = await invoke<{ platform: string; default_vault_path: string | null }>('get_platform_info');
 
-      if (selected && typeof selected === 'string') {
-        props.onVaultOpen(selected);
-        await loadFiles(selected);
+      if (platformInfo.platform === 'android' || platformInfo.platform === 'ios') {
+        // On mobile, use default vault path (folder picker not supported)
+        if (platformInfo.default_vault_path) {
+          // Create the directory if it doesn't exist
+          await invoke('create_folder', { path: platformInfo.default_vault_path });
+          props.onVaultOpen(platformInfo.default_vault_path);
+          await loadFiles(platformInfo.default_vault_path);
+        } else {
+          console.error('Could not determine default vault path');
+        }
+      } else {
+        // On desktop, use folder picker
+        const selected = await open({
+          directory: true,
+          multiple: false,
+          title: 'Select Vault Folder',
+        });
+
+        if (selected && typeof selected === 'string') {
+          props.onVaultOpen(selected);
+          await loadFiles(selected);
+        }
       }
     } catch (err) {
       console.error('Failed to open vault:', err);

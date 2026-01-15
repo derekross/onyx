@@ -11,7 +11,7 @@ use walkdir::WalkDir;
 use parking_lot::Mutex;
 #[cfg(not(target_os = "android"))]
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 #[cfg(not(target_os = "android"))]
 use keyring::Entry;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher, EventKind};
@@ -27,6 +27,42 @@ pub struct AppSettings {
 fn get_config_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home).join(".config").join("onyx")
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PlatformInfo {
+    pub platform: String,
+    pub default_vault_path: Option<String>,
+}
+
+#[tauri::command]
+fn get_platform_info(app: AppHandle) -> PlatformInfo {
+    let platform = if cfg!(target_os = "android") {
+        "android".to_string()
+    } else if cfg!(target_os = "ios") {
+        "ios".to_string()
+    } else if cfg!(target_os = "macos") {
+        "macos".to_string()
+    } else if cfg!(target_os = "windows") {
+        "windows".to_string()
+    } else {
+        "linux".to_string()
+    };
+
+    let default_vault_path = if cfg!(target_os = "android") || cfg!(target_os = "ios") {
+        // On mobile, use the app's data directory
+        app.path().app_data_dir().ok()
+            .map(|p| p.join("Onyx").to_string_lossy().to_string())
+    } else {
+        // On desktop, use Documents/Onyx
+        app.path().document_dir().ok()
+            .map(|p| p.join("Onyx").to_string_lossy().to_string())
+    };
+
+    PlatformInfo {
+        platform,
+        default_vault_path,
+    }
 }
 
 fn get_settings_path() -> PathBuf {
@@ -795,6 +831,7 @@ pub fn run() {
             skill_save_file,
             skill_delete,
             skill_list_installed,
+            get_platform_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
