@@ -394,6 +394,7 @@ fn spawn_pty(
             format!("{}/.local/bin", home),
             format!("{}/bin", home),
             format!("{}/.cargo/bin", home),
+            format!("{}/.opencode/bin", home),
             format!("{}/.nvm/versions/node/*/bin", home), // Common node location
         ];
         let enhanced_path = format!(
