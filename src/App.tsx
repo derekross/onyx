@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getSyncEngine, getCurrentLogin } from './lib/nostr';
 import { getSignerFromStoredLogin } from './lib/nostr/signer';
+import { buildNoteIndex, resolveWikilink, NoteIndex, FileEntry } from './lib/editor/note-index';
 
 interface Tab {
   path: string;
@@ -40,6 +41,7 @@ const App: Component = () => {
   let refreshSidebar: (() => void) | null = null;
   let setSearchQuery: ((query: string) => void) | null = null;
   const [scrollToLine, setScrollToLine] = createSignal<number | null>(null);
+  const [noteIndex, setNoteIndex] = createSignal<NoteIndex | null>(null);
   const [isResizing, setIsResizing] = createSignal<'sidebar' | 'terminal' | null>(null);
   const [resizeStartX, setResizeStartX] = createSignal(0);
   const [resizeStartWidth, setResizeStartWidth] = createSignal(0);
@@ -65,9 +67,16 @@ const App: Component = () => {
   // Load settings on startup
   onMount(() => {
     // Load settings asynchronously
-    invoke<AppSettings>('load_settings').then(settings => {
+    invoke<AppSettings>('load_settings').then(async (settings) => {
       if (settings.vault_path) {
         setVaultPath(settings.vault_path);
+        // Build note index for wikilink resolution
+        try {
+          const files = await invoke<FileEntry[]>('list_files', { path: settings.vault_path });
+          setNoteIndex(buildNoteIndex(files, settings.vault_path));
+        } catch (err) {
+          console.error('Failed to build initial note index:', err);
+        }
       }
       if (settings.show_terminal) {
         setShowTerminal(true);
@@ -90,6 +99,7 @@ const App: Component = () => {
       }
       fileChangeDebounce = window.setTimeout(() => {
         refreshSidebar?.();
+        rebuildNoteIndex();  // Rebuild index on file changes for wikilink resolution
         fileChangeDebounce = null;
       }, 500);
     }).then(unlisten => {
@@ -331,6 +341,47 @@ const App: Component = () => {
     // Set search query with tag: prefix
     if (setSearchQuery) {
       setSearchQuery(`#${tag}`);
+    }
+  };
+
+  // Build/rebuild note index for wikilink resolution
+  const rebuildNoteIndex = async () => {
+    const path = vaultPath();
+    if (!path) return;
+    try {
+      const files = await invoke<FileEntry[]>('list_files', { path });
+      setNoteIndex(buildNoteIndex(files, path));
+    } catch (err) {
+      console.error('Failed to build note index:', err);
+    }
+  };
+
+  // Handle wikilink clicks from editor
+  const handleWikilinkClick = async (target: string) => {
+    const index = noteIndex();
+    const vault = vaultPath();
+    if (!vault) return;
+
+    // Resolve the wikilink to a file path
+    const resolved = resolveWikilink(
+      target,
+      currentTab()?.path || '',
+      index,
+      vault
+    );
+
+    if (resolved.exists && resolved.path) {
+      // Open existing note
+      await openFile(resolved.path);
+    } else if (resolved.path) {
+      // Create new note
+      try {
+        await invoke('create_file', { path: resolved.path });
+        await openFile(resolved.path);
+        refreshSidebar?.();
+      } catch (err) {
+        console.error('Failed to create note:', err);
+      }
     }
   };
 
@@ -638,6 +689,8 @@ const App: Component = () => {
               onHashtagClick={handleHashtagClick}
               scrollToLine={scrollToLine()}
               onScrollComplete={() => setScrollToLine(null)}
+              onWikilinkClick={handleWikilinkClick}
+              noteIndex={noteIndex()}
             />
           </div>
 

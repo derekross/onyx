@@ -714,6 +714,34 @@ body {
   text-decoration: none;
 }
 
+/* Wikilinks */
+.milkdown-editor .wikilink {
+  color: #a78bfa;
+  background: rgba(139, 92, 246, 0.1);
+  padding: 1px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s ease;
+}
+
+.milkdown-editor .wikilink:hover {
+  background: rgba(139, 92, 246, 0.25);
+  text-decoration: none;
+}
+
+/* Broken wikilink (note doesn't exist) */
+.milkdown-editor .wikilink.broken,
+.milkdown-editor .broken .wikilink {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.1);
+}
+
+.milkdown-editor .wikilink.broken:hover,
+.milkdown-editor .broken .wikilink:hover {
+  background: rgba(248, 113, 113, 0.2);
+}
+
 .milkdown-editor hr { border: none; border-top: 1px solid var(--border); margin: 1.5em 0; }
 .milkdown-editor table { border-collapse: collapse; width: 100%; margin-bottom: 1em; }
 .milkdown-editor th, .milkdown-editor td { border: 1px solid var(--border); padding: 0.5em 1em; text-align: left; }

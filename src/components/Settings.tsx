@@ -152,6 +152,11 @@ const Settings: Component<SettingsProps> = (props) => {
   // OpenCode settings
   const [openCodePath, setOpenCodePath] = createSignal<string>('');
 
+  // Files & Links settings
+  const [useWikilinks, setUseWikilinks] = createSignal(
+    localStorage.getItem('use_wikilinks') !== 'false' // Default to true
+  );
+
   // Load saved login on mount
   onMount(async () => {
     // Get app version
@@ -944,6 +949,12 @@ const Settings: Component<SettingsProps> = (props) => {
     localStorage.removeItem('opencode_path');
   };
 
+  // Wikilinks toggle handler
+  const handleWikilinksToggle = (enabled: boolean) => {
+    setUseWikilinks(enabled);
+    localStorage.setItem('use_wikilinks', String(enabled));
+  };
+
   // Import custom skill handler
   const handleImportSkill = async () => {
     try {
@@ -1158,7 +1169,11 @@ const Settings: Component<SettingsProps> = (props) => {
                     <div class="setting-description">Use wikilink syntax instead of markdown links</div>
                   </div>
                   <label class="setting-toggle">
-                    <input type="checkbox" checked />
+                    <input
+                      type="checkbox"
+                      checked={useWikilinks()}
+                      onChange={(e) => handleWikilinksToggle(e.target.checked)}
+                    />
                     <span class="toggle-slider"></span>
                   </label>
                 </div>

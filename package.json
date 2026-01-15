@@ -1,6 +1,6 @@
 {
   "name": "onyx",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Open source knowledge base and note-taking app",
   "type": "module",
   "scripts": {
@@ -34,6 +34,7 @@
     "nostr-tools": "^2.19.4",
     "qrcode": "^1.5.4",
     "qrcode.react": "^4.2.0",
+    "remark-wiki-link": "^2.0.1",
     "solid-js": "^1.9.10",
     "uuid": "^13.0.0"
   },
