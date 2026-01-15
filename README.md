@@ -91,8 +91,8 @@ Your notes are encrypted with NIP-44 before being published to relays. Only you 
 
 Onyx uses a custom Nostr event structure for encrypted file sync:
 
-- **Vault Index** (kind 32001) - Encrypted list of files in your vault
-- **File Events** (kind 32002) - Individual encrypted file contents
+- **Vault Index** (kind 30801) - Encrypted list of files in your vault
+- **File Events** (kind 30800) - Individual encrypted file contents
 
 All content is encrypted using NIP-44 with a conversation key derived from your own public/private key pair. This means only you can decrypt your notes, and relays only see encrypted blobs.
 
