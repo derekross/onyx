@@ -25,6 +25,9 @@ import {
   setEmbedVaultPath,
   setEmbedCurrentFilePath,
 } from '../lib/editor/embed-plugin';
+import { highlightPlugin } from '../lib/editor/highlight-plugin';
+import { commentPlugin } from '../lib/editor/comment-plugin';
+import { calloutPlugin } from '../lib/editor/callout-plugin';
 import { AssetIndex } from '../lib/editor/asset-index';
 import {
   vaultUploadPlugin,
@@ -132,6 +135,9 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       .use(headingPlugin)
       .use(blockPlugin)
       .use(linkAutocompletePlugin)
+      .use(highlightPlugin)
+      .use(commentPlugin)
+      .use(calloutPlugin)
       // Configure listener after the plugin is loaded
       .config((ctx) => {
         ctx.get(listenerCtx).markdownUpdated((ctx, markdown, prevMarkdown) => {

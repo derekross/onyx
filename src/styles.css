@@ -3304,3 +3304,134 @@ body {
 .milkdown-editor .wikilink[data-block]:not([data-block=""]) {
   text-decoration-style: dashed;
 }
+
+/* ============================================================================
+   Obsidian Highlights ==text==
+   ============================================================================ */
+
+.milkdown-editor .obsidian-highlight {
+  background-color: rgba(255, 208, 0, 0.4);
+  padding: 1px 0;
+  border-radius: 2px;
+}
+
+.milkdown-editor .highlight-delimiter {
+  font-size: 0;
+  opacity: 0;
+  width: 0;
+  display: inline-block;
+  overflow: hidden;
+}
+
+/* Light theme adjustment */
+[data-theme="light"] .milkdown-editor .obsidian-highlight {
+  background-color: rgba(255, 208, 0, 0.5);
+}
+
+/* ============================================================================
+   Obsidian Comments %%text%%
+   ============================================================================ */
+
+.milkdown-editor .obsidian-comment {
+  color: var(--text-secondary, #888);
+  opacity: 0.6;
+  font-style: italic;
+  background-color: rgba(128, 128, 128, 0.1);
+  padding: 1px 2px;
+  border-radius: 2px;
+}
+
+.milkdown-editor .comment-delimiter {
+  font-size: 0;
+  opacity: 0;
+  width: 0;
+  display: inline-block;
+  overflow: hidden;
+}
+
+/* ============================================================================
+   Obsidian Callouts > [!type]
+   ============================================================================ */
+
+/* Base callout styling applied to blockquotes */
+.milkdown-editor .callout {
+  border-left: 4px solid var(--callout-color, #448aff);
+  background: color-mix(in srgb, var(--callout-color, #448aff) 10%, transparent);
+  padding: 12px 16px;
+  margin: 8px 0;
+  border-radius: 4px;
+}
+
+/* Fallback for browsers without color-mix */
+@supports not (background: color-mix(in srgb, red 10%, transparent)) {
+  .milkdown-editor .callout {
+    background: rgba(68, 138, 255, 0.1);
+  }
+  .milkdown-editor .callout-warning,
+  .milkdown-editor .callout-caution,
+  .milkdown-editor .callout-attention {
+    background: rgba(255, 145, 0, 0.1);
+  }
+  .milkdown-editor .callout-danger,
+  .milkdown-editor .callout-error,
+  .milkdown-editor .callout-failure,
+  .milkdown-editor .callout-fail,
+  .milkdown-editor .callout-missing,
+  .milkdown-editor .callout-bug {
+    background: rgba(255, 82, 82, 0.1);
+  }
+  .milkdown-editor .callout-success,
+  .milkdown-editor .callout-check,
+  .milkdown-editor .callout-done {
+    background: rgba(0, 200, 83, 0.1);
+  }
+  .milkdown-editor .callout-tip,
+  .milkdown-editor .callout-hint,
+  .milkdown-editor .callout-important {
+    background: rgba(0, 191, 165, 0.1);
+  }
+  .milkdown-editor .callout-question,
+  .milkdown-editor .callout-help,
+  .milkdown-editor .callout-faq {
+    background: rgba(255, 171, 0, 0.1);
+  }
+  .milkdown-editor .callout-abstract,
+  .milkdown-editor .callout-summary,
+  .milkdown-editor .callout-tldr {
+    background: rgba(0, 184, 212, 0.1);
+  }
+  .milkdown-editor .callout-example {
+    background: rgba(124, 77, 255, 0.1);
+  }
+  .milkdown-editor .callout-quote,
+  .milkdown-editor .callout-cite {
+    background: rgba(158, 158, 158, 0.1);
+  }
+}
+
+/* Hide the [!type] marker and show icon */
+.milkdown-editor .callout-type-marker {
+  font-size: 0;
+  position: relative;
+}
+
+.milkdown-editor .callout-type-marker::before {
+  content: attr(data-icon) ' ';
+  font-size: 1rem;
+  margin-right: 4px;
+}
+
+/* Override default blockquote styling inside callouts */
+.milkdown-editor .callout {
+  border-left-width: 4px;
+  color: var(--text-primary);
+}
+
+.milkdown-editor .callout p {
+  margin: 0;
+}
+
+/* Nested paragraphs in callouts */
+.milkdown-editor .callout p + p {
+  margin-top: 0.5em;
+}
