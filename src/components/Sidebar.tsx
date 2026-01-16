@@ -200,7 +200,8 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
   const handleRename = (path: string, currentName: string) => {
     setIsRenaming(path);
-    setRenameValue(currentName);
+    // Strip .md extension for display in rename input
+    setRenameValue(currentName.replace(/\.md$/i, ''));
     closeContextMenu();
   };
 
@@ -208,7 +209,14 @@ const Sidebar: Component<SidebarProps> = (props) => {
     if (!renameValue()) return;
 
     const parentPath = oldPath.substring(0, oldPath.lastIndexOf('/'));
-    const newPath = `${parentPath}/${renameValue()}`;
+    let newName = renameValue();
+
+    // If original file was .md and user didn't include extension, add it back
+    if (oldPath.endsWith('.md') && !newName.endsWith('.md')) {
+      newName = `${newName}.md`;
+    }
+
+    const newPath = `${parentPath}/${newName}`;
 
     try {
       await invoke('rename_file', { oldPath, newPath });
@@ -497,7 +505,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
               />
             }
           >
-            <span>{itemProps.entry.name}</span>
+            <span>{itemProps.entry.name.replace(/\.md$/i, '')}</span>
           </Show>
         </div>
         <Show when={itemProps.entry.isDirectory && isExpanded()}>
@@ -507,7 +515,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
               <input
                 type="text"
                 class="rename-input"
-                placeholder={isCreating()?.type === 'folder' ? 'folder name' : 'filename.md'}
+                placeholder={isCreating()?.type === 'folder' ? 'folder name' : 'filename'}
                 value={newItemName()}
                 onInput={(e) => setNewItemName(e.currentTarget.value)}
                 onKeyDown={(e) => {
@@ -706,7 +714,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
                 <input
                   type="text"
                   class="rename-input"
-                  placeholder={isCreating()?.type === 'folder' ? 'folder name' : 'filename.md'}
+                  placeholder={isCreating()?.type === 'folder' ? 'folder name' : 'filename'}
                   value={newItemName()}
                   onInput={(e) => setNewItemName(e.currentTarget.value)}
                   onKeyDown={(e) => {

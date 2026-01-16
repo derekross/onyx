@@ -157,10 +157,95 @@ const Settings: Component<SettingsProps> = (props) => {
     localStorage.getItem('use_wikilinks') !== 'false' // Default to true
   );
 
+  // Editor settings
+  const [editorFontFamily, setEditorFontFamily] = createSignal(
+    localStorage.getItem('editor_font_family') || 'system-ui, sans-serif'
+  );
+  const [editorFontSize, setEditorFontSize] = createSignal(
+    parseInt(localStorage.getItem('editor_font_size') || '16')
+  );
+  const [editorLineHeight, setEditorLineHeight] = createSignal(
+    parseFloat(localStorage.getItem('editor_line_height') || '1.6')
+  );
+  const [showLineNumbers, setShowLineNumbers] = createSignal(
+    localStorage.getItem('show_line_numbers') === 'true'
+  );
+  const [vimMode, setVimMode] = createSignal(
+    localStorage.getItem('vim_mode') === 'true'
+  );
+  const [spellCheck, setSpellCheck] = createSignal(
+    localStorage.getItem('spell_check') !== 'false' // Default to true
+  );
+
+  // Appearance settings
+  const [theme, setTheme] = createSignal<'dark' | 'light' | 'system'>(
+    (localStorage.getItem('theme') as 'dark' | 'light' | 'system') || 'dark'
+  );
+  const [accentColor, setAccentColor] = createSignal(
+    localStorage.getItem('accent_color') || '#8b5cf6'
+  );
+  const [interfaceFontSize, setInterfaceFontSize] = createSignal<'small' | 'medium' | 'large'>(
+    (localStorage.getItem('interface_font_size') as 'small' | 'medium' | 'large') || 'medium'
+  );
+  const [translucentWindow, setTranslucentWindow] = createSignal(
+    localStorage.getItem('translucent_window') === 'true'
+  );
+
+  // Apply appearance settings to document
+  const applyAppearanceSettings = () => {
+    const root = document.documentElement;
+
+    // Apply theme
+    const currentTheme = theme();
+    if (currentTheme === 'system') {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      root.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+    } else {
+      root.setAttribute('data-theme', currentTheme);
+    }
+
+    // Apply accent color
+    const accent = accentColor();
+    root.style.setProperty('--accent', accent);
+    // Calculate hover color (lighter version)
+    const hoverColor = lightenColor(accent, 20);
+    root.style.setProperty('--accent-hover', hoverColor);
+    // Calculate muted color (with alpha)
+    root.style.setProperty('--accent-muted', `${accent}26`); // 15% opacity
+
+    // Apply font size
+    root.setAttribute('data-font-size', interfaceFontSize());
+
+    // Apply translucent
+    root.setAttribute('data-translucent', translucentWindow().toString());
+  };
+
+  // Helper to lighten a hex color
+  const lightenColor = (hex: string, percent: number): string => {
+    const num = parseInt(hex.replace('#', ''), 16);
+    const amt = Math.round(2.55 * percent);
+    const R = Math.min(255, (num >> 16) + amt);
+    const G = Math.min(255, ((num >> 8) & 0x00FF) + amt);
+    const B = Math.min(255, (num & 0x0000FF) + amt);
+    return `#${(0x1000000 + R * 0x10000 + G * 0x100 + B).toString(16).slice(1)}`;
+  };
+
   // Load saved login on mount
   onMount(async () => {
     // Get app version
     getVersion().then(setAppVersion).catch(() => setAppVersion('unknown'));
+
+    // Apply saved appearance settings on mount
+    applyAppearanceSettings();
+
+    // Listen for system theme changes
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleThemeChange = () => {
+      if (theme() === 'system') {
+        applyAppearanceSettings();
+      }
+    };
+    mediaQuery.addEventListener('change', handleThemeChange);
 
     // Load OpenCode path setting
     const savedOpenCodePath = localStorage.getItem('opencode_path');
@@ -1083,7 +1168,16 @@ const Settings: Component<SettingsProps> = (props) => {
                     <div class="setting-name">Font family</div>
                     <div class="setting-description">Font used in the editor</div>
                   </div>
-                  <input type="text" class="setting-input wide" value="system-ui, sans-serif" />
+                  <input
+                    type="text"
+                    class="setting-input wide"
+                    value={editorFontFamily()}
+                    onInput={(e) => {
+                      const value = e.currentTarget.value;
+                      setEditorFontFamily(value);
+                      localStorage.setItem('editor_font_family', value);
+                    }}
+                  />
                 </div>
 
                 <div class="setting-item">
@@ -1091,7 +1185,18 @@ const Settings: Component<SettingsProps> = (props) => {
                     <div class="setting-name">Font size</div>
                     <div class="setting-description">Base font size in pixels</div>
                   </div>
-                  <input type="number" class="setting-input" value="16" min="10" max="32" />
+                  <input
+                    type="number"
+                    class="setting-input"
+                    value={editorFontSize()}
+                    min="10"
+                    max="32"
+                    onInput={(e) => {
+                      const value = parseInt(e.currentTarget.value) || 16;
+                      setEditorFontSize(value);
+                      localStorage.setItem('editor_font_size', value.toString());
+                    }}
+                  />
                 </div>
 
                 <div class="setting-item">
@@ -1099,7 +1204,19 @@ const Settings: Component<SettingsProps> = (props) => {
                     <div class="setting-name">Line height</div>
                     <div class="setting-description">Line height multiplier</div>
                   </div>
-                  <input type="number" class="setting-input" value="1.6" min="1" max="3" step="0.1" />
+                  <input
+                    type="number"
+                    class="setting-input"
+                    value={editorLineHeight()}
+                    min="1"
+                    max="3"
+                    step="0.1"
+                    onInput={(e) => {
+                      const value = parseFloat(e.currentTarget.value) || 1.6;
+                      setEditorLineHeight(value);
+                      localStorage.setItem('editor_line_height', value.toString());
+                    }}
+                  />
                 </div>
 
                 <div class="setting-item">
@@ -1108,7 +1225,15 @@ const Settings: Component<SettingsProps> = (props) => {
                     <div class="setting-description">Display line numbers in the editor</div>
                   </div>
                   <label class="setting-toggle">
-                    <input type="checkbox" />
+                    <input
+                      type="checkbox"
+                      checked={showLineNumbers()}
+                      onChange={(e) => {
+                        const value = e.currentTarget.checked;
+                        setShowLineNumbers(value);
+                        localStorage.setItem('show_line_numbers', value.toString());
+                      }}
+                    />
                     <span class="toggle-slider"></span>
                   </label>
                 </div>
@@ -1119,7 +1244,15 @@ const Settings: Component<SettingsProps> = (props) => {
                     <div class="setting-description">Enable Vim keybindings in the editor</div>
                   </div>
                   <label class="setting-toggle">
-                    <input type="checkbox" />
+                    <input
+                      type="checkbox"
+                      checked={vimMode()}
+                      onChange={(e) => {
+                        const value = e.currentTarget.checked;
+                        setVimMode(value);
+                        localStorage.setItem('vim_mode', value.toString());
+                      }}
+                    />
                     <span class="toggle-slider"></span>
                   </label>
                 </div>
@@ -1130,10 +1263,20 @@ const Settings: Component<SettingsProps> = (props) => {
                     <div class="setting-description">Enable spell checking</div>
                   </div>
                   <label class="setting-toggle">
-                    <input type="checkbox" checked />
+                    <input
+                      type="checkbox"
+                      checked={spellCheck()}
+                      onChange={(e) => {
+                        const value = e.currentTarget.checked;
+                        setSpellCheck(value);
+                        localStorage.setItem('spell_check', value.toString());
+                      }}
+                    />
                     <span class="toggle-slider"></span>
                   </label>
                 </div>
+
+                <p class="setting-note">Note: Editor changes take effect when you reload the app or open a new file.</p>
               </div>
             </Show>
 
@@ -1207,7 +1350,22 @@ const Settings: Component<SettingsProps> = (props) => {
                     <div class="setting-name">Theme</div>
                     <div class="setting-description">Color theme for the application</div>
                   </div>
-                  <select class="setting-select">
+                  <select
+                    class="setting-select"
+                    value={theme()}
+                    onChange={(e) => {
+                      const value = e.currentTarget.value as 'dark' | 'light' | 'system';
+                      setTheme(value);
+                      localStorage.setItem('theme', value);
+                      // Auto-apply purple accent for Nostr Purple theme
+                      if (value === 'dark') {
+                        const purple = '#8b5cf6';
+                        setAccentColor(purple);
+                        localStorage.setItem('accent_color', purple);
+                      }
+                      applyAppearanceSettings();
+                    }}
+                  >
                     <option value="dark">Dark (Nostr Purple)</option>
                     <option value="light">Light</option>
                     <option value="system">System</option>
@@ -1219,7 +1377,17 @@ const Settings: Component<SettingsProps> = (props) => {
                     <div class="setting-name">Accent color</div>
                     <div class="setting-description">Primary accent color</div>
                   </div>
-                  <input type="color" class="setting-color" value="#8b5cf6" />
+                  <input
+                    type="color"
+                    class="setting-color"
+                    value={accentColor()}
+                    onInput={(e) => {
+                      const value = e.currentTarget.value;
+                      setAccentColor(value);
+                      localStorage.setItem('accent_color', value);
+                      applyAppearanceSettings();
+                    }}
+                  />
                 </div>
 
                 <div class="setting-item">
@@ -1227,9 +1395,18 @@ const Settings: Component<SettingsProps> = (props) => {
                     <div class="setting-name">Interface font size</div>
                     <div class="setting-description">Font size for UI elements</div>
                   </div>
-                  <select class="setting-select">
+                  <select
+                    class="setting-select"
+                    value={interfaceFontSize()}
+                    onChange={(e) => {
+                      const value = e.currentTarget.value as 'small' | 'medium' | 'large';
+                      setInterfaceFontSize(value);
+                      localStorage.setItem('interface_font_size', value);
+                      applyAppearanceSettings();
+                    }}
+                  >
                     <option value="small">Small</option>
-                    <option value="medium" selected>Medium</option>
+                    <option value="medium">Medium</option>
                     <option value="large">Large</option>
                   </select>
                 </div>
@@ -1240,7 +1417,16 @@ const Settings: Component<SettingsProps> = (props) => {
                     <div class="setting-description">Enable window translucency effects</div>
                   </div>
                   <label class="setting-toggle">
-                    <input type="checkbox" />
+                    <input
+                      type="checkbox"
+                      checked={translucentWindow()}
+                      onChange={(e) => {
+                        const value = e.currentTarget.checked;
+                        setTranslucentWindow(value);
+                        localStorage.setItem('translucent_window', value.toString());
+                        applyAppearanceSettings();
+                      }}
+                    />
                     <span class="toggle-slider"></span>
                   </label>
                 </div>

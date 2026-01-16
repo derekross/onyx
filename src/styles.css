@@ -10,6 +10,39 @@
   --border: #3a3a3f;
   --sidebar-width: 260px;
   --danger: #ef4444;
+  --font-size-ui: 14px;
+}
+
+/* Light theme */
+[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f5f5;
+  --bg-tertiary: #e8e8e8;
+  --text-primary: #1a1a1d;
+  --text-secondary: #666666;
+  --border: #d0d0d0;
+}
+
+/* Font size variants */
+[data-font-size="small"] {
+  --font-size-ui: 12px;
+}
+
+[data-font-size="medium"] {
+  --font-size-ui: 14px;
+}
+
+[data-font-size="large"] {
+  --font-size-ui: 16px;
+}
+
+/* Translucent window effect */
+[data-translucent="true"] body {
+  background: rgba(26, 26, 29, 0.85);
+}
+
+[data-translucent="true"][data-theme="light"] body {
+  background: rgba(255, 255, 255, 0.85);
 }
 
 * {
@@ -20,6 +53,7 @@
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  font-size: var(--font-size-ui);
   background: var(--bg-primary);
   color: var(--text-primary);
   height: 100vh;
@@ -1769,6 +1803,16 @@ body {
 .setting-toggle input:disabled + .toggle-slider {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.setting-note {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-style: italic;
+  margin-top: 16px;
+  padding: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
 }
 
 /* Hotkey Display */
