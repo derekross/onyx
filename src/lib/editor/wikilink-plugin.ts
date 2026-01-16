@@ -2,8 +2,7 @@
  * Milkdown Wikilink Plugin
  *
  * Adds support for Obsidian-style [[wikilink]] syntax using decorations.
- * Similar approach to hashtagPlugin.ts - the wikilinks are stored as plain text
- * and styled/clickable via ProseMirror decorations.
+ * Uses multiple decorations to hide brackets and style the link text.
  */
 
 import { $prose } from '@milkdown/utils';
@@ -46,10 +45,21 @@ function findWikilinks(doc: any): DecorationSet {
       WIKILINK_REGEX.lastIndex = 0;
 
       while ((match = WIKILINK_REGEX.exec(text)) !== null) {
-        const start = pos + match.index;
-        const end = start + match[0].length;
+        const fullStart = pos + match.index;
+        const fullEnd = fullStart + match[0].length;
         const target = match[1].trim();
         const alias = match[2]?.trim();
+
+        // Calculate positions for brackets and content
+        const openBracketStart = fullStart;
+        const openBracketEnd = fullStart + 2; // [[
+
+        // Content is either "target|alias" or just "target"
+        const contentStart = openBracketEnd;
+        const contentEnd = fullEnd - 2; // before ]]
+
+        const closeBracketStart = fullEnd - 2;
+        const closeBracketEnd = fullEnd; // ]]
 
         // Check if link target exists
         let exists = false;
@@ -61,14 +71,21 @@ function findWikilinks(doc: any): DecorationSet {
                    currentNoteIndex.byRelativePath.has(target.replace(/\.md$/i, ''));
         }
 
-        // Create a decoration with custom class and data attributes
-        const decoration = Decoration.inline(start, end, {
+        // Decoration for opening [[
+        decorations.push(Decoration.inline(openBracketStart, openBracketEnd, {
+          class: 'wikilink-bracket',
+        }));
+
+        // Decoration for the link content
+        decorations.push(Decoration.inline(contentStart, contentEnd, {
           class: exists ? 'wikilink' : 'wikilink broken',
           'data-target': target,
-          'data-alias': alias || '',
-        });
+        }));
 
-        decorations.push(decoration);
+        // Decoration for closing ]]
+        decorations.push(Decoration.inline(closeBracketStart, closeBracketEnd, {
+          class: 'wikilink-bracket',
+        }));
       }
     }
   });
