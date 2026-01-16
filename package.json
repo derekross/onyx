@@ -36,7 +36,9 @@
     "qrcode.react": "^4.2.0",
     "remark-wiki-link": "^2.0.1",
     "solid-js": "^1.9.10",
-    "uuid": "^13.0.0"
+    "uuid": "^13.0.0",
+    "vis-data": "^8.0.3",
+    "vis-network": "^10.0.2"
   },
   "devDependencies": {
     "@tauri-apps/api": "^2.9.1",

@@ -256,3 +256,179 @@ export function resolveWikilink(
   const sortedByLength = [...matches].sort((a, b) => a.length - b.length);
   return { path: sortedByLength[0], exists: true };
 }
+
+// ============================================================================
+// Graph Building for Graph View
+// ============================================================================
+
+export interface NoteLink {
+  from: string;      // source note path
+  to: string;        // target note path (resolved) or raw link if unresolved
+  toRaw: string;     // original link text
+  exists: boolean;   // does target note exist
+}
+
+export interface NoteNode {
+  id: string;        // note path (unique identifier)
+  name: string;      // display name (filename without extension)
+  incomingCount: number;
+  outgoingCount: number;
+}
+
+export interface NoteGraph {
+  nodes: NoteNode[];
+  links: NoteLink[];
+}
+
+// Regex to extract [[wikilinks]] from content - matches [[target]] or [[target|alias]]
+// Also handles escaped brackets \[\[ which Milkdown may produce
+const WIKILINK_REGEX = /\\?\[\\?\[([^\]|]+)(?:\|[^\]]+)?\\?\]\\?\]/g;
+
+/**
+ * Extract all wikilink targets from markdown content
+ */
+export function extractLinksFromContent(content: string): string[] {
+  const links: string[] = [];
+  let match;
+
+  // Reset regex state
+  WIKILINK_REGEX.lastIndex = 0;
+
+  while ((match = WIKILINK_REGEX.exec(content)) !== null) {
+    const target = match[1].trim();
+    if (target && !links.includes(target)) {
+      links.push(target);
+    }
+  }
+
+  return links;
+}
+
+/**
+ * Build a graph of all notes and their connections
+ *
+ * @param vaultPath - Root path of the vault
+ * @param noteIndex - The built note index
+ * @param readFile - Function to read file content (passed from caller to avoid Tauri dependency)
+ */
+export async function buildNoteGraph(
+  vaultPath: string,
+  noteIndex: NoteIndex,
+  readFile: (path: string) => Promise<string>
+): Promise<NoteGraph> {
+  const nodes: Map<string, NoteNode> = new Map();
+  const links: NoteLink[] = [];
+  const incomingCounts: Map<string, number> = new Map();
+
+  // Initialize all notes as nodes
+  for (const path of noteIndex.allPaths) {
+    const baseName = getBaseName(path);
+    nodes.set(path, {
+      id: path,
+      name: baseName,
+      incomingCount: 0,
+      outgoingCount: 0,
+    });
+  }
+
+  // Process each note to extract links
+  for (const sourcePath of noteIndex.allPaths) {
+    try {
+      const content = await readFile(sourcePath);
+      const linkTargets = extractLinksFromContent(content);
+
+      // Update outgoing count
+      const sourceNode = nodes.get(sourcePath);
+      if (sourceNode) {
+        sourceNode.outgoingCount = linkTargets.length;
+      }
+
+      // Resolve each link and create edges
+      for (const target of linkTargets) {
+        const resolved = resolveWikilink(target, sourcePath, noteIndex, vaultPath);
+
+        const link: NoteLink = {
+          from: sourcePath,
+          to: resolved.path || target,
+          toRaw: target,
+          exists: resolved.exists,
+        };
+        links.push(link);
+
+        // Track incoming links
+        if (resolved.exists && resolved.path) {
+          const currentCount = incomingCounts.get(resolved.path) || 0;
+          incomingCounts.set(resolved.path, currentCount + 1);
+        }
+      }
+    } catch (err) {
+      // Skip files that can't be read
+      console.warn(`Could not read file for graph: ${sourcePath}`, err);
+    }
+  }
+
+  // Update incoming counts on nodes
+  for (const [path, count] of incomingCounts) {
+    const node = nodes.get(path);
+    if (node) {
+      node.incomingCount = count;
+    }
+  }
+
+  return {
+    nodes: Array.from(nodes.values()),
+    links,
+  };
+}
+
+/**
+ * Build a local graph showing only connections to/from a specific note
+ *
+ * @param centerPath - The path of the note to center on
+ * @param fullGraph - The full note graph
+ * @param depth - How many levels of connections to include (1 = direct only)
+ */
+export function buildLocalGraph(
+  centerPath: string,
+  fullGraph: NoteGraph,
+  depth: number = 1
+): NoteGraph {
+  const includedPaths = new Set<string>([centerPath]);
+  const includedLinks: NoteLink[] = [];
+
+  // BFS to find nodes within depth
+  let currentLevel = new Set<string>([centerPath]);
+
+  for (let d = 0; d < depth; d++) {
+    const nextLevel = new Set<string>();
+
+    for (const link of fullGraph.links) {
+      // Outgoing links from current level
+      if (currentLevel.has(link.from)) {
+        if (link.exists) {
+          nextLevel.add(link.to);
+          includedPaths.add(link.to);
+        }
+        includedLinks.push(link);
+      }
+      // Incoming links to current level
+      if (currentLevel.has(link.to) && link.exists) {
+        nextLevel.add(link.from);
+        includedPaths.add(link.from);
+        if (!includedLinks.includes(link)) {
+          includedLinks.push(link);
+        }
+      }
+    }
+
+    currentLevel = nextLevel;
+  }
+
+  // Filter nodes to only included ones
+  const filteredNodes = fullGraph.nodes.filter(n => includedPaths.has(n.id));
+
+  return {
+    nodes: filteredNodes,
+    links: includedLinks,
+  };
+}

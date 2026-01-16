@@ -6,6 +6,7 @@ import CommandPalette from './components/CommandPalette';
 import SearchPanel from './components/SearchPanel';
 import OpenCodeTerminal from './components/OpenCodeTerminal';
 import Settings from './components/Settings';
+import GraphView from './components/GraphView';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getSyncEngine, getCurrentLogin } from './lib/nostr';
@@ -35,6 +36,7 @@ const App: Component = () => {
   const [showSearch, setShowSearch] = createSignal(false);
   const [showTerminal, setShowTerminal] = createSignal(false);
   const [showSettings, setShowSettings] = createSignal(false);
+  const [showGraphView, setShowGraphView] = createSignal(false);
   const [terminalWidth, setTerminalWidth] = createSignal(500);
   const [sidebarWidth, setSidebarWidth] = createSignal(260);
   let createNoteFromSidebar: (() => void) | null = null;
@@ -585,6 +587,20 @@ const App: Component = () => {
             <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path>
           </svg>
         </button>
+        <button
+          class={`icon-btn ${showGraphView() ? 'active' : ''}`}
+          onClick={() => setShowGraphView(true)}
+          title="Graph View"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="6" cy="6" r="3"></circle>
+            <circle cx="18" cy="6" r="3"></circle>
+            <circle cx="6" cy="18" r="3"></circle>
+            <circle cx="18" cy="18" r="3"></circle>
+            <line x1="8.5" y1="7.5" x2="15.5" y2="16.5"></line>
+            <line x1="15.5" y1="7.5" x2="8.5" y2="16.5"></line>
+          </svg>
+        </button>
         <div class="icon-bar-spacer"></div>
         <button
           class={`icon-btn opencode-icon ${showTerminal() ? 'active' : ''}`}
@@ -647,13 +663,13 @@ const App: Component = () => {
         <div class="toolbar">
           <div class="toolbar-left">
             {/* Tab Bar */}
-            <Show when={tabs().length > 0}>
+            <Show when={tabs().length > 0 || showGraphView()}>
               <div class="tab-bar">
                 <For each={tabs()}>
                   {(tab, index) => (
                     <div
-                      class={`tab ${index() === activeTabIndex() ? 'active' : ''}`}
-                      onClick={() => setActiveTabIndex(index())}
+                      class={`tab ${index() === activeTabIndex() && !showGraphView() ? 'active' : ''}`}
+                      onClick={() => { setShowGraphView(false); setActiveTabIndex(index()); }}
                     >
                       <span class="tab-name">{tab.isDirty ? '● ' : ''}{tab.name}</span>
                       <button
@@ -668,6 +684,28 @@ const App: Component = () => {
                     </div>
                   )}
                 </For>
+                <Show when={showGraphView()}>
+                  <div class={`tab graph-tab active`}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="6" cy="6" r="3"></circle>
+                      <circle cx="18" cy="6" r="3"></circle>
+                      <circle cx="6" cy="18" r="3"></circle>
+                      <circle cx="18" cy="18" r="3"></circle>
+                      <line x1="8.5" y1="7.5" x2="15.5" y2="16.5"></line>
+                      <line x1="15.5" y1="7.5" x2="8.5" y2="16.5"></line>
+                    </svg>
+                    <span class="tab-name">Graph</span>
+                    <button
+                      class="tab-close"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowGraphView(false);
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                </Show>
               </div>
             </Show>
           </div>
@@ -678,20 +716,29 @@ const App: Component = () => {
 
         {/* Editor + Terminal horizontal layout */}
         <div class="content-area">
-          {/* Editor */}
+          {/* Editor or Graph View */}
           <div class="editor-area">
-            <Editor
-              content={currentTab()?.content || ''}
-              onContentChange={updateTabContent}
-              filePath={currentTab()?.path || null}
-              vaultPath={vaultPath()}
-              onCreateFile={createNewNote}
-              onHashtagClick={handleHashtagClick}
-              scrollToLine={scrollToLine()}
-              onScrollComplete={() => setScrollToLine(null)}
-              onWikilinkClick={handleWikilinkClick}
-              noteIndex={noteIndex()}
-            />
+            <Show when={showGraphView()} fallback={
+              <Editor
+                content={currentTab()?.content || ''}
+                onContentChange={updateTabContent}
+                filePath={currentTab()?.path || null}
+                vaultPath={vaultPath()}
+                onCreateFile={createNewNote}
+                onHashtagClick={handleHashtagClick}
+                scrollToLine={scrollToLine()}
+                onScrollComplete={() => setScrollToLine(null)}
+                onWikilinkClick={handleWikilinkClick}
+                noteIndex={noteIndex()}
+              />
+            }>
+              <GraphView
+                vaultPath={vaultPath()}
+                noteIndex={noteIndex()}
+                currentFile={currentTab()?.path || null}
+                onNodeClick={(path) => { setShowGraphView(false); openFile(path); }}
+              />
+            </Show>
           </div>
 
           {/* OpenCode Terminal Panel - Right Side */}
