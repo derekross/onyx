@@ -66,8 +66,54 @@ const App: Component = () => {
   // Debounce timer for file watcher
   let fileChangeDebounce: number | null = null;
 
+  // Apply appearance settings from localStorage
+  const applyAppearanceSettings = () => {
+    const root = document.documentElement;
+
+    // Apply theme
+    const theme = localStorage.getItem('theme') || 'dark';
+    if (theme === 'system') {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      root.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+    } else {
+      root.setAttribute('data-theme', theme);
+    }
+
+    // Apply accent color
+    const accent = localStorage.getItem('accent_color') || '#8b5cf6';
+    root.style.setProperty('--accent', accent);
+    // Calculate hover color (lighter version)
+    const num = parseInt(accent.replace('#', ''), 16);
+    const amt = Math.round(2.55 * 20);
+    const R = Math.min(255, (num >> 16) + amt);
+    const G = Math.min(255, ((num >> 8) & 0x00FF) + amt);
+    const B = Math.min(255, (num & 0x0000FF) + amt);
+    const hoverColor = `#${(0x1000000 + R * 0x10000 + G * 0x100 + B).toString(16).slice(1)}`;
+    root.style.setProperty('--accent-hover', hoverColor);
+    root.style.setProperty('--accent-muted', `${accent}26`);
+
+    // Apply font size
+    const fontSize = localStorage.getItem('interface_font_size') || 'medium';
+    root.setAttribute('data-font-size', fontSize);
+
+    // Apply translucent
+    const translucent = localStorage.getItem('translucent_window') === 'true';
+    root.setAttribute('data-translucent', translucent.toString());
+  };
+
   // Load settings on startup
   onMount(() => {
+    // Apply appearance settings immediately
+    applyAppearanceSettings();
+
+    // Listen for system theme changes
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    mediaQuery.addEventListener('change', () => {
+      if (localStorage.getItem('theme') === 'system') {
+        applyAppearanceSettings();
+      }
+    });
+
     // Load settings asynchronously
     invoke<AppSettings>('load_settings').then(async (settings) => {
       if (settings.vault_path) {
@@ -172,7 +218,8 @@ const App: Component = () => {
     // Load file content
     try {
       const content = await invoke<string>('read_file', { path });
-      const name = path.split('/').pop() || 'Untitled';
+      // Strip .md extension for display name
+      const name = (path.split('/').pop() || 'Untitled').replace(/\.md$/i, '');
 
       setTabs([...tabs(), { path, name, content, isDirty: false }]);
       setActiveTabIndex(tabs().length); // Will be the new last index after state updates
@@ -607,7 +654,7 @@ const App: Component = () => {
           onClick={() => setShowTerminal(!showTerminal())}
           title="Toggle OpenCode (Ctrl+`)"
         >
-          <svg width="20" height="20" viewBox="0 0 512 512" fill="currentColor">
+          <svg width="24" height="24" viewBox="0 0 512 512" fill="currentColor">
             <path fill-rule="evenodd" clip-rule="evenodd" d="M384 416H128V96H384V416ZM320 160H192V352H320V160Z"/>
           </svg>
         </button>

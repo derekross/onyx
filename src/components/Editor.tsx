@@ -84,6 +84,17 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
   const initEditor = async (container: HTMLDivElement) => {
     containerRef = container;
 
+    // Apply editor settings from localStorage
+    const fontFamily = localStorage.getItem('editor_font_family') || 'system-ui, sans-serif';
+    const fontSize = localStorage.getItem('editor_font_size') || '16';
+    const lineHeight = localStorage.getItem('editor_line_height') || '1.6';
+    const spellCheck = localStorage.getItem('spell_check') !== 'false';
+
+    container.style.fontFamily = fontFamily;
+    container.style.fontSize = `${fontSize}px`;
+    container.style.lineHeight = lineHeight;
+    container.setAttribute('spellcheck', spellCheck.toString());
+
     // Add keyboard listener for save
     container.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
