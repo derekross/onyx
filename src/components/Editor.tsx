@@ -4,11 +4,13 @@ import { commonmark } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
 import { nord } from '@milkdown/theme-nord';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
+import { TextSelection } from '@milkdown/prose/state';
 import { invoke } from '@tauri-apps/api/core';
 import { hashtagPlugin, setHashtagClickHandler } from '../lib/hashtagPlugin';
 import { wikilinkPlugin, setWikilinkClickHandler, setWikilinkNoteIndex } from '../lib/editor/wikilink-plugin';
 import { NoteIndex } from '../lib/editor/note-index';
 import { taskPlugin } from '../lib/taskPlugin';
+import { headingPlugin, headingPluginKey, HeadingInfo } from '../lib/editor/heading-plugin';
 
 import '@milkdown/theme-nord/style.css';
 
@@ -23,6 +25,10 @@ interface EditorProps {
   onScrollComplete?: () => void;
   onWikilinkClick?: (target: string) => void;
   noteIndex?: NoteIndex | null;
+  // Heading plugin props
+  onHeadingsChange?: (headings: HeadingInfo[]) => void;
+  onActiveHeadingChange?: (id: string | null) => void;
+  scrollToHeadingId?: string | null;
 }
 
 const MilkdownEditor: Component<EditorProps> = (props) => {
@@ -30,6 +36,8 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
   const [currentPath, setCurrentPath] = createSignal<string | null>(null);
   let editorInstance: Editor | null = null;
   let containerRef: HTMLDivElement | undefined;
+  let scrollDebounce: number | null = null;
+  let scrollHandler: (() => void) | null = null;
 
   const saveFile = async () => {
     if (!props.filePath || saving()) return;
@@ -70,10 +78,16 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       .use(hashtagPlugin)
       .use(wikilinkPlugin)
       .use(taskPlugin)
+      .use(headingPlugin)
       // Configure listener after the plugin is loaded
       .config((ctx) => {
         ctx.get(listenerCtx).markdownUpdated((ctx, markdown, prevMarkdown) => {
           props.onContentChange(markdown);
+
+          // Export headings from plugin state
+          const view = ctx.get(editorViewCtx);
+          const headings = headingPluginKey.getState(view.state);
+          props.onHeadingsChange?.(headings || []);
         });
       })
       .create();
@@ -107,6 +121,45 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
     if (props.filePath && props.content !== undefined) {
       setCurrentPath(props.filePath);
       await createEditor(container, props.content);
+
+      // Set up scroll tracking for active heading after editor is created
+      if (editorInstance?.ctx) {
+        const view = editorInstance.ctx.get(editorViewCtx);
+
+        // Export initial headings
+        const initialHeadings = headingPluginKey.getState(view.state) || [];
+        props.onHeadingsChange?.(initialHeadings);
+
+        // Create scroll handler for tracking active heading
+        scrollHandler = () => {
+          if (scrollDebounce) clearTimeout(scrollDebounce);
+          scrollDebounce = window.setTimeout(() => {
+            if (!editorInstance?.ctx) return;
+
+            const view = editorInstance.ctx.get(editorViewCtx);
+            const headings = headingPluginKey.getState(view.state) || [];
+            const containerRect = view.dom.getBoundingClientRect();
+
+            for (const heading of headings) {
+              try {
+                const coords = view.coordsAtPos(heading.pos);
+                if (coords.top >= containerRect.top - 50) {
+                  props.onActiveHeadingChange?.(heading.id);
+                  return;
+                }
+              } catch (e) {
+                // Position may be invalid if doc changed, skip
+              }
+            }
+
+            const last = headings[headings.length - 1];
+            props.onActiveHeadingChange?.(last?.id || null);
+          }, 100);
+        };
+
+        // Attach scroll listener to the editor content
+        view.dom.addEventListener('scroll', scrollHandler, true);
+      }
     }
   };
 
@@ -174,6 +227,16 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
         if (filePath && filePath !== currentPath() && containerRef) {
           setCurrentPath(filePath);
 
+          // Remove old scroll listener before destroying editor
+          if (scrollHandler && editorInstance?.ctx) {
+            try {
+              const view = editorInstance.ctx.get(editorViewCtx);
+              view.dom.removeEventListener('scroll', scrollHandler, true);
+            } catch (e) {
+              // Ignore errors if view is already destroyed
+            }
+          }
+
           // Always recreate editor on tab switch for reliability
           // Destroy existing instance first
           if (editorInstance) {
@@ -182,7 +245,21 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
           }
 
           // Create fresh editor with new content
-          await createEditor(containerRef, props.content);
+          const editor = await createEditor(containerRef, props.content);
+
+          // Set up scroll tracking for active heading after editor is created
+          if (editor?.ctx) {
+            const view = editor.ctx.get(editorViewCtx);
+
+            // Export initial headings
+            const initialHeadings = headingPluginKey.getState(view.state) || [];
+            props.onHeadingsChange?.(initialHeadings);
+
+            // Attach scroll listener
+            if (scrollHandler) {
+              view.dom.addEventListener('scroll', scrollHandler, true);
+            }
+          }
 
           // After editor is ready, scroll to line if specified
           if (props.scrollToLine) {
@@ -213,7 +290,51 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
     )
   );
 
+  // Handle scroll to heading (from outline panel click)
+  createEffect(
+    on(
+      () => props.scrollToHeadingId,
+      (id) => {
+        if (!id || !editorInstance?.ctx) return;
+
+        const view = editorInstance.ctx.get(editorViewCtx);
+        const headings = headingPluginKey.getState(view.state) || [];
+        const heading = headings.find(h => h.id === id);
+
+        if (heading) {
+          try {
+            // Use nodeDOM to get the heading element directly (h1-h6)
+            const domNode = view.nodeDOM(heading.pos);
+            if (domNode instanceof HTMLElement) {
+              domNode.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              return;
+            }
+
+            // Fallback: use transaction with scrollIntoView
+            const { tr } = view.state;
+            const $pos = view.state.doc.resolve(heading.pos);
+            view.dispatch(tr.setSelection(TextSelection.near($pos)).scrollIntoView());
+          } catch (e) {
+            console.error('Failed to scroll to heading:', e);
+          }
+        }
+      }
+    )
+  );
+
   onCleanup(async () => {
+    // Remove scroll listener
+    if (scrollHandler && editorInstance?.ctx) {
+      try {
+        const view = editorInstance.ctx.get(editorViewCtx);
+        view.dom.removeEventListener('scroll', scrollHandler, true);
+      } catch (e) {
+        // Ignore errors if view is already destroyed
+      }
+    }
+    if (scrollDebounce) {
+      clearTimeout(scrollDebounce);
+    }
     if (editorInstance) {
       await editorInstance.destroy();
       editorInstance = null;

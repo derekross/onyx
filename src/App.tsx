@@ -7,11 +7,13 @@ import SearchPanel from './components/SearchPanel';
 import OpenCodeTerminal from './components/OpenCodeTerminal';
 import Settings from './components/Settings';
 import GraphView from './components/GraphView';
+import OutlinePanel from './components/OutlinePanel';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getSyncEngine, getCurrentLogin } from './lib/nostr';
 import { getSignerFromStoredLogin } from './lib/nostr/signer';
 import { buildNoteIndex, resolveWikilink, NoteIndex, FileEntry } from './lib/editor/note-index';
+import { HeadingInfo } from './lib/editor/heading-plugin';
 
 interface Tab {
   path: string;
@@ -44,7 +46,20 @@ const App: Component = () => {
   let setSearchQuery: ((query: string) => void) | null = null;
   const [scrollToLine, setScrollToLine] = createSignal<number | null>(null);
   const [noteIndex, setNoteIndex] = createSignal<NoteIndex | null>(null);
-  const [isResizing, setIsResizing] = createSignal<'sidebar' | 'terminal' | null>(null);
+  const [isResizing, setIsResizing] = createSignal<'sidebar' | 'terminal' | 'outline' | null>(null);
+
+  // Outline panel state
+  const [showOutline, setShowOutline] = createSignal(
+    localStorage.getItem('show_outline') === 'true'
+  );
+  const [outlineWidth, setOutlineWidth] = createSignal(
+    parseInt(localStorage.getItem('outline_width') || '250')
+  );
+
+  // Heading state from editor plugin
+  const [currentHeadings, setCurrentHeadings] = createSignal<HeadingInfo[]>([]);
+  const [activeHeadingId, setActiveHeadingId] = createSignal<string | null>(null);
+  const [scrollToHeadingId, setScrollToHeadingId] = createSignal<string | null>(null);
   const [resizeStartX, setResizeStartX] = createSignal(0);
   const [resizeStartWidth, setResizeStartWidth] = createSignal(0);
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false);
@@ -182,6 +197,21 @@ const App: Component = () => {
         show_terminal: terminal,
       }
     }).catch(console.error);
+  });
+
+  // Persist outline panel state
+  createEffect(() => {
+    localStorage.setItem('show_outline', showOutline().toString());
+  });
+  createEffect(() => {
+    localStorage.setItem('outline_width', outlineWidth().toString());
+  });
+
+  // Clear headings when switching tabs
+  createEffect(() => {
+    activeTabIndex(); // Dependency
+    setCurrentHeadings([]);
+    setActiveHeadingId(null);
   });
 
   const currentTab = () => {
@@ -331,6 +361,9 @@ const App: Component = () => {
       } else if (isMod && e.key === '`') {
         e.preventDefault();
         setShowTerminal(!showTerminal());
+      } else if (isMod && e.shiftKey && e.key === 'O') {
+        e.preventDefault();
+        setShowOutline(!showOutline());
       } else if (e.key === 'Escape') {
         setShowQuickSwitcher(false);
         setShowCommandPalette(false);
@@ -545,6 +578,7 @@ const App: Component = () => {
     { id: 'quick-switcher', name: 'Quick Switcher', shortcut: 'Ctrl+O', action: () => setShowQuickSwitcher(true) },
     { id: 'search', name: 'Search in Files', shortcut: 'Ctrl+Shift+F', action: () => setShowSearch(true) },
     { id: 'toggle-terminal', name: 'Toggle Terminal', shortcut: 'Ctrl+`', action: () => setShowTerminal(!showTerminal()) },
+    { id: 'toggle-outline', name: 'Toggle Outline', shortcut: 'Ctrl+Shift+O', action: () => setShowOutline(!showOutline()) },
     { id: 'close-tab', name: 'Close Tab', action: () => activeTabIndex() >= 0 && closeTab(activeTabIndex()) },
   ];
 
@@ -567,6 +601,15 @@ const App: Component = () => {
     document.body.style.userSelect = 'none';
   };
 
+  const handleOutlineResizeStart = (e: MouseEvent) => {
+    e.preventDefault();
+    setIsResizing('outline');
+    setResizeStartX(e.clientX);
+    setResizeStartWidth(outlineWidth());
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
   const handleResizeMove = (e: MouseEvent) => {
     const target = isResizing();
     if (!target) return;
@@ -581,6 +624,11 @@ const App: Component = () => {
       const delta = resizeStartX() - e.clientX;
       const newWidth = resizeStartWidth() + delta;
       setTerminalWidth(Math.max(300, Math.min(800, newWidth)));
+    } else if (target === 'outline') {
+      // Outline: dragging left = wider panel (same as terminal)
+      const delta = resizeStartX() - e.clientX;
+      const newWidth = resizeStartWidth() + delta;
+      setOutlineWidth(Math.max(180, Math.min(400, newWidth)));
     }
   };
 
@@ -646,6 +694,20 @@ const App: Component = () => {
             <circle cx="18" cy="18" r="3"></circle>
             <line x1="8.5" y1="7.5" x2="15.5" y2="16.5"></line>
             <line x1="15.5" y1="7.5" x2="8.5" y2="16.5"></line>
+          </svg>
+        </button>
+        <button
+          class={`icon-btn ${showOutline() ? 'active' : ''}`}
+          onClick={() => setShowOutline(!showOutline())}
+          title="Outline (Ctrl+Shift+O)"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="8" y1="6" x2="21" y2="6"></line>
+            <line x1="8" y1="12" x2="21" y2="12"></line>
+            <line x1="8" y1="18" x2="21" y2="18"></line>
+            <line x1="3" y1="6" x2="3.01" y2="6"></line>
+            <line x1="3" y1="12" x2="3.01" y2="12"></line>
+            <line x1="3" y1="18" x2="3.01" y2="18"></line>
           </svg>
         </button>
         <div class="icon-bar-spacer"></div>
@@ -777,6 +839,9 @@ const App: Component = () => {
                 onScrollComplete={() => setScrollToLine(null)}
                 onWikilinkClick={handleWikilinkClick}
                 noteIndex={noteIndex()}
+                onHeadingsChange={setCurrentHeadings}
+                onActiveHeadingChange={setActiveHeadingId}
+                scrollToHeadingId={scrollToHeadingId()}
               />
             }>
               <GraphView
@@ -787,6 +852,25 @@ const App: Component = () => {
               />
             </Show>
           </div>
+
+          {/* Outline Panel - Right Side */}
+          <Show when={showOutline() && currentTab()}>
+            <div
+              class="resize-handle"
+              onMouseDown={handleOutlineResizeStart}
+            />
+            <div class="outline-panel-container" style={{ width: `${outlineWidth()}px` }}>
+              <OutlinePanel
+                headings={currentHeadings()}
+                activeHeadingId={activeHeadingId()}
+                onHeadingClick={(id) => {
+                  setScrollToHeadingId(id);
+                  setTimeout(() => setScrollToHeadingId(null), 100);
+                }}
+                onClose={() => setShowOutline(false)}
+              />
+            </div>
+          </Show>
 
           {/* OpenCode Terminal Panel - Right Side */}
           <Show when={showTerminal()}>
