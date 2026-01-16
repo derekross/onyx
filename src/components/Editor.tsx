@@ -6,6 +6,8 @@ import { nord } from '@milkdown/theme-nord';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
 import { invoke } from '@tauri-apps/api/core';
 import { hashtagPlugin, setHashtagClickHandler } from '../lib/hashtagPlugin';
+import { wikilinkPlugin, setWikilinkClickHandler, setWikilinkNoteIndex } from '../lib/editor/wikilink-plugin';
+import { NoteIndex } from '../lib/editor/note-index';
 
 import '@milkdown/theme-nord/style.css';
 
@@ -18,6 +20,8 @@ interface EditorProps {
   onHashtagClick?: (tag: string) => void;
   scrollToLine?: number | null;
   onScrollComplete?: () => void;
+  onWikilinkClick?: (target: string) => void;
+  noteIndex?: NoteIndex | null;
 }
 
 const MilkdownEditor: Component<EditorProps> = (props) => {
@@ -48,8 +52,10 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       editorInstance = null;
     }
 
-    // Set up hashtag click handler
+    // Set up click handlers (same pattern for hashtags and wikilinks)
     setHashtagClickHandler(props.onHashtagClick || null);
+    setWikilinkClickHandler(props.onWikilinkClick || null);
+    setWikilinkNoteIndex(props.noteIndex || null);
 
     editorInstance = await Editor.make()
       .config((ctx) => {
@@ -61,6 +67,7 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       .use(gfm)
       .use(listener)
       .use(hashtagPlugin)
+      .use(wikilinkPlugin)
       // Configure listener after the plugin is loaded
       .config((ctx) => {
         ctx.get(listenerCtx).markdownUpdated((ctx, markdown, prevMarkdown) => {
