@@ -1000,9 +1000,18 @@ body {
   color: var(--text-secondary);
 }
 
+.welcome-logo {
+  margin-bottom: 24px;
+  opacity: 0.9;
+}
+
+.welcome-logo svg {
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.3));
+}
+
 .welcome-screen h1 {
   font-size: 48px;
-  font-weight: 300;
+  font-weight: 600;
   margin-bottom: 16px;
   color: var(--text-primary);
 }

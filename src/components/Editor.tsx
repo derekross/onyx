@@ -582,6 +582,34 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       when={props.filePath}
       fallback={
         <div class="welcome-screen">
+          <div class="welcome-logo">
+            <svg width="96" height="96" viewBox="0 0 512 512">
+              <defs>
+                <linearGradient id="welcomeRockShine" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" style="stop-color:#3a3a3a"/>
+                  <stop offset="30%" style="stop-color:#1a1a1a"/>
+                  <stop offset="70%" style="stop-color:#0a0a0a"/>
+                  <stop offset="100%" style="stop-color:#000000"/>
+                </linearGradient>
+                <linearGradient id="welcomeHighlight" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" style="stop-color:#4a4a4a"/>
+                  <stop offset="100%" style="stop-color:#2a2a2a"/>
+                </linearGradient>
+              </defs>
+              <g>
+                <polygon points="256,48 380,140 420,280 350,420 162,420 92,280 132,140" fill="#0a0a0a"/>
+                <polygon points="132,140 92,280 162,420 200,320 180,200" fill="#151515"/>
+                <polygon points="380,140 420,280 350,420 312,320 332,200" fill="#101010"/>
+                <polygon points="162,420 350,420 312,320 256,360 200,320" fill="#080808"/>
+                <polygon points="256,48 132,140 180,200 256,160" fill="url(#welcomeHighlight)"/>
+                <polygon points="256,48 380,140 332,200 256,160" fill="#2a2a2a"/>
+                <polygon points="180,200 332,200 312,320 256,360 200,320" fill="url(#welcomeRockShine)"/>
+                <polygon points="200,210 280,210 260,260 210,250" fill="#4a4a4a" opacity="0.3"/>
+                <polygon points="210,220 250,220 240,245 215,240" fill="#5a5a5a" opacity="0.2"/>
+              </g>
+              <polygon points="256,48 380,140 420,280 350,420 162,420 92,280 132,140" fill="none" stroke="#2a2a2a" stroke-width="2"/>
+            </svg>
+          </div>
           <Show
             when={props.vaultPath}
             fallback={
