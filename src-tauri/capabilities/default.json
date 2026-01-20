@@ -8,7 +8,18 @@
   "permissions": [
     "core:default",
     "dialog:default",
+    "shell:allow-open",
     "fs:default",
-    "shell:allow-open"
+    "fs:read-all",
+    "fs:write-all",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$HOME/**" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DOWNLOAD/**" },
+        { "path": "$DESKTOP/**" }
+      ]
+    }
   ]
 }

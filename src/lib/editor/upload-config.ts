@@ -1,0 +1,428 @@
+import { $prose } from '@milkdown/utils';
+import { Plugin, PluginKey } from '@milkdown/prose/state';
+import type { EditorView } from '@milkdown/prose/view';
+import { writeFile, readFile, mkdir, exists } from '@tauri-apps/plugin-fs';
+
+// Module-level state
+let currentVaultPath: string | null = null;
+let onFilesUploaded: (() => void) | null = null;
+
+export const setUploadVaultPath = (path: string | null) => {
+  currentVaultPath = path;
+};
+
+export const setOnFilesUploaded = (callback: (() => void) | null) => {
+  onFilesUploaded = callback;
+};
+
+// Supported file extensions
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif'];
+const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'mkv', 'ogv'];
+const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'flac', 'm4a', '3gp'];
+const PDF_EXTENSIONS = ['pdf'];
+
+const ALL_EXTENSIONS = [...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS, ...PDF_EXTENSIONS];
+
+/**
+ * Join path segments with forward slashes (works on all platforms with Tauri plugin-fs)
+ */
+function joinPath(...segments: string[]): string {
+  if (segments.length === 0) return '';
+
+  // Normalize all segments to forward slashes
+  const normalized = segments.map(s => {
+    let norm = s.replace(/\\/g, '/');
+    // Remove trailing slashes
+    norm = norm.replace(/\/+$/, '');
+    return norm;
+  }).filter(s => s.length > 0);
+
+  let result = normalized.join('/');
+  // Clean up any double slashes (except after protocol like file://)
+  result = result.replace(/([^:])\/+/g, '$1/');
+
+  return result;
+}
+
+/**
+ * Check if a path looks like a Windows or Unix file path to a supported file
+ */
+function extractFilePath(text: string): string | null {
+  // Clean up the text - remove quotes and trim
+  let cleaned = text.trim().replace(/^["']|["']$/g, '').trim();
+
+  // Check for Windows path (C:\... or \\...)
+  const windowsMatch = cleaned.match(/^([A-Za-z]:\\|\\\\).+$/);
+  // Check for Unix path (/...)
+  const unixMatch = cleaned.match(/^\/[^\s]+$/);
+
+  const path = windowsMatch?.[0] || unixMatch?.[0];
+  if (!path) return null;
+
+  // Check if it ends with a supported extension
+  const ext = path.split('.').pop()?.toLowerCase();
+  if (ext && ALL_EXTENSIONS.includes(ext)) {
+    return path;
+  }
+
+  return null;
+}
+
+/**
+ * Save file to vault's attachments folder from a File object
+ * Uses @tauri-apps/plugin-fs for efficient binary data transfer
+ */
+async function saveFileToVault(file: File, vaultPath: string): Promise<string> {
+  console.log('[Upload] saveFileToVault called with file:', file.name, 'type:', file.type, 'size:', file.size);
+  console.log('[Upload] vaultPath:', vaultPath);
+
+  let fileName = file.name;
+
+  // For clipboard pastes with generic names, generate timestamp-based name
+  if (!fileName || fileName === 'image.png' || fileName === 'blob' || fileName === 'image') {
+    const ext = getExtensionFromMime(file.type) || 'png';
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    fileName = `pasted-${timestamp}.${ext}`;
+  }
+
+  fileName = sanitizeFileName(fileName);
+
+  const attachmentsDir = joinPath(vaultPath, 'attachments');
+
+  // Ensure attachments directory exists
+  if (!(await exists(attachmentsDir))) {
+    console.log('[Upload] Creating attachments directory:', attachmentsDir);
+    await mkdir(attachmentsDir, { recursive: true });
+  }
+
+  fileName = await getUniqueFileName(attachmentsDir, fileName);
+
+  const relativePath = `attachments/${fileName}`;
+  const fullPath = joinPath(vaultPath, relativePath);
+
+  console.log('[Upload] Saving to fullPath:', fullPath);
+  console.log('[Upload] relativePath:', relativePath);
+
+  try {
+    // Use writeFile with Uint8Array directly - no JSON serialization overhead
+    const arrayBuffer = await file.arrayBuffer();
+    console.log('[Upload] Read', arrayBuffer.byteLength, 'bytes from file');
+
+    await writeFile(fullPath, new Uint8Array(arrayBuffer));
+    console.log('[Upload] File written successfully');
+
+    return relativePath;
+  } catch (err) {
+    console.error('[Upload] Failed to write file:', err);
+    throw err;
+  }
+}
+
+/**
+ * Copy a file from a source path (Windows or Unix) to the vault's attachments folder
+ * Uses @tauri-apps/plugin-fs for efficient binary data transfer
+ */
+async function copyFileToVault(sourcePath: string, vaultPath: string): Promise<string> {
+  console.log('[Upload] copyFileToVault called with sourcePath:', sourcePath);
+
+  // Extract filename from path
+  const pathParts = sourcePath.replace(/\\/g, '/').split('/');
+  let fileName = pathParts[pathParts.length - 1];
+
+  fileName = sanitizeFileName(fileName);
+
+  const attachmentsDir = joinPath(vaultPath, 'attachments');
+
+  // Ensure attachments directory exists
+  if (!(await exists(attachmentsDir))) {
+    console.log('[Upload] Creating attachments directory:', attachmentsDir);
+    await mkdir(attachmentsDir, { recursive: true });
+  }
+
+  fileName = await getUniqueFileName(attachmentsDir, fileName);
+
+  const relativePath = `attachments/${fileName}`;
+  const fullPath = joinPath(vaultPath, relativePath);
+
+  console.log('[Upload] Copying to fullPath:', fullPath);
+
+  try {
+    // Read source file as binary using plugin-fs
+    const data = await readFile(sourcePath);
+    console.log('[Upload] Read', data.length, 'bytes from source');
+
+    // Write to destination
+    await writeFile(fullPath, data);
+    console.log('[Upload] File copied successfully');
+
+    return relativePath;
+  } catch (err) {
+    console.error('[Upload] Failed to copy file:', err);
+    throw err;
+  }
+}
+
+/**
+ * Insert an embed node at the current position
+ */
+function insertEmbed(view: EditorView, relativePath: string): boolean {
+  console.log('[Upload] insertEmbed called with path:', relativePath);
+
+  const { state, dispatch } = view;
+  const embedType = state.schema.nodes.embed;
+
+  if (!embedType) {
+    console.error('[Upload] Embed node type not found in schema');
+    return false;
+  }
+
+  const node = embedType.create({
+    target: relativePath,
+    anchor: null,
+    width: null,
+    height: null,
+  });
+
+  const tr = state.tr.replaceSelectionWith(node);
+  dispatch(tr);
+
+  console.log('[Upload] Embed node inserted');
+  return true;
+}
+
+/**
+ * Handle files from paste
+ */
+async function handleFiles(files: FileList, view: EditorView): Promise<boolean> {
+  console.log('[Upload] handleFiles called with', files.length, 'files');
+  console.log('[Upload] currentVaultPath:', currentVaultPath);
+
+  if (!currentVaultPath || files.length === 0) {
+    console.log('[Upload] No vault path or no files, returning false');
+    return false;
+  }
+
+  let handled = false;
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files.item(i);
+    if (!file) continue;
+
+    console.log('[Upload] Processing file', i, ':', file.name, 'type:', file.type);
+
+    // Check if file type is supported
+    if (!isSupportedFileType(file.type)) {
+      console.warn('[Upload] Unsupported file type:', file.type);
+      continue;
+    }
+
+    try {
+      const relativePath = await saveFileToVault(file, currentVaultPath);
+      insertEmbed(view, relativePath);
+      handled = true;
+    } catch (err) {
+      console.error('[Upload] Failed to save file:', err);
+    }
+  }
+
+  if (handled) {
+    console.log('[Upload] Files uploaded, triggering callback');
+    onFilesUploaded?.();
+  }
+
+  return handled;
+}
+
+/**
+ * Handle pasted text that might be a file path
+ */
+async function handleFilePath(text: string, view: EditorView): Promise<boolean> {
+  console.log('[Upload] handleFilePath called with:', text);
+
+  if (!currentVaultPath) {
+    console.log('[Upload] No vault path set');
+    return false;
+  }
+
+  const filePath = extractFilePath(text);
+  if (!filePath) {
+    console.log('[Upload] No valid file path found in text');
+    return false;
+  }
+
+  console.log('[Upload] Extracted file path:', filePath);
+
+  try {
+    const relativePath = await copyFileToVault(filePath, currentVaultPath);
+    insertEmbed(view, relativePath);
+    onFilesUploaded?.();
+    return true;
+  } catch (err) {
+    console.error('[Upload] Failed to copy file from path:', err);
+    return false;
+  }
+}
+
+// Plugin key for identification
+const uploadPluginKey = new PluginKey('vault-upload');
+
+/**
+ * Custom ProseMirror plugin for handling file uploads via paste
+ * Note: Drag-drop is handled separately by Tauri's tauri://drag-drop event
+ */
+export const vaultUploadPlugin = $prose(() => {
+  return new Plugin({
+    key: uploadPluginKey,
+    props: {
+      handlePaste(view, event) {
+        console.log('[Upload] handlePaste triggered');
+
+        if (!currentVaultPath) {
+          console.log('[Upload] No vault path, skipping');
+          return false;
+        }
+
+        const clipboardData = event.clipboardData;
+        if (!clipboardData) {
+          console.log('[Upload] No clipboard data');
+          return false;
+        }
+
+        // First, check for files (images from clipboard)
+        const files = clipboardData.files;
+        console.log('[Upload] Clipboard files:', files?.length || 0);
+
+        if (files && files.length > 0) {
+          // Check if any file is a supported type
+          let hasSupported = false;
+          for (let i = 0; i < files.length; i++) {
+            const file = files.item(i);
+            console.log('[Upload] File', i, ':', file?.name, 'type:', file?.type);
+            if (file && isSupportedFileType(file.type)) {
+              hasSupported = true;
+            }
+          }
+
+          if (hasSupported) {
+            console.log('[Upload] Found supported files, handling...');
+            event.preventDefault();
+
+            // Handle async properly - don't insert embed until file is saved
+            (async () => {
+              try {
+                await handleFiles(files, view);
+              } catch (err) {
+                console.error('[Upload] Error in handleFiles:', err);
+              }
+            })();
+
+            return true;
+          }
+        }
+
+        // Check for text that might be a file path
+        const text = clipboardData.getData('text/plain');
+        console.log('[Upload] Clipboard text:', text?.substring(0, 100));
+
+        if (text) {
+          const filePath = extractFilePath(text);
+          if (filePath) {
+            console.log('[Upload] Found file path, handling...');
+            event.preventDefault();
+
+            (async () => {
+              try {
+                await handleFilePath(text, view);
+              } catch (err) {
+                console.error('[Upload] Error in handleFilePath:', err);
+              }
+            })();
+
+            return true;
+          }
+        }
+
+        console.log('[Upload] No supported content found');
+        return false;
+      },
+      // Note: handleDrop is intentionally NOT implemented here.
+      // Tauri 2.x webview doesn't forward external OS file drops to DOM dataTransfer.files.
+      // Instead, drag-drop is handled via Tauri's tauri://drag-drop event listener in Editor.tsx.
+    },
+  });
+});
+
+// Helper functions
+
+/**
+ * Get a unique filename in the given directory
+ */
+async function getUniqueFileName(directory: string, fileName: string): Promise<string> {
+  const ext = fileName.split('.').pop() || '';
+  const nameWithoutExt = ext ? fileName.slice(0, -(ext.length + 1)) : fileName;
+
+  let candidate = fileName;
+  let counter = 1;
+
+  while (await exists(joinPath(directory, candidate))) {
+    candidate = `${nameWithoutExt}-${counter}.${ext}`;
+    counter++;
+  }
+
+  return candidate;
+}
+
+function getExtensionFromMime(mimeType: string): string | null {
+  const map: Record<string, string> = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'image/svg+xml': 'svg',
+    'image/bmp': 'bmp',
+    'image/avif': 'avif',
+    'video/mp4': 'mp4',
+    'video/webm': 'webm',
+    'video/quicktime': 'mov',
+    'audio/mpeg': 'mp3',
+    'audio/wav': 'wav',
+    'audio/ogg': 'ogg',
+    'audio/flac': 'flac',
+    'application/pdf': 'pdf',
+  };
+  return map[mimeType] || null;
+}
+
+function sanitizeFileName(name: string): string {
+  // Replace problematic characters but keep the name readable
+  return name
+    .replace(/[<>:"|?*]/g, '-')
+    .replace(/\\/g, '-')
+    .replace(/\//g, '-')
+    .replace(/\s+/g, '-');
+}
+
+function isSupportedFileType(mimeType: string): boolean {
+  if (!mimeType) return false;
+  return (
+    mimeType.startsWith('image/') ||
+    mimeType.startsWith('video/') ||
+    mimeType.startsWith('audio/') ||
+    mimeType === 'application/pdf'
+  );
+}
+
+// Export utilities for use in Editor.tsx drag-drop handler
+export { joinPath, sanitizeFileName, ALL_EXTENSIONS };
+
+/**
+ * Get a unique filename - exported for use in Editor.tsx
+ */
+export async function getUniqueFileNameInVault(
+  vaultPath: string,
+  folder: string,
+  fileName: string
+): Promise<string> {
+  const directory = joinPath(vaultPath, folder);
+  return getUniqueFileName(directory, fileName);
+}

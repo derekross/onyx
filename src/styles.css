@@ -1473,6 +1473,297 @@ body {
   border-color: var(--text-secondary);
 }
 
+/* Outline Panel - follows opencode-terminal-panel pattern */
+.outline-panel-container {
+  flex-shrink: 0;
+  height: 100%;
+  display: flex;
+  border-left: 1px solid var(--border);
+}
+
+.outline-panel {
+  background: var(--bg-secondary);
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.outline-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.outline-header-title {
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.outline-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.outline-close:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.outline-search {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.outline-search input {
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.outline-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.outline-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.outline-item {
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  transition: background 0.15s ease;
+}
+
+.outline-item:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.outline-item.active {
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+.outline-marker {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  padding: 2px 4px;
+  border-radius: 3px;
+  min-width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.outline-item.active .outline-marker {
+  background: var(--accent);
+  color: white;
+}
+
+.outline-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+/* Heading level styles */
+.outline-level-1 .outline-text { font-weight: 600; }
+.outline-level-2 .outline-text { font-weight: 500; }
+.outline-level-3 .outline-text { font-weight: 400; }
+
+.outline-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* Backlinks Panel */
+.backlinks-panel-container {
+  flex-shrink: 0;
+  height: 100%;
+  display: flex;
+  border-left: 1px solid var(--border);
+}
+
+.backlinks-panel {
+  background: var(--bg-secondary);
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.backlinks-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.backlinks-header-title {
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.backlinks-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.backlinks-close:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.backlinks-search {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.backlinks-search input {
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.backlinks-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.backlinks-content {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Collapsible Sections */
+.backlinks-section {
+  border-bottom: 1px solid var(--border);
+}
+
+.backlinks-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.backlinks-section-header:hover {
+  background: var(--bg-tertiary);
+}
+
+.backlinks-chevron {
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+
+.backlinks-chevron.collapsed {
+  transform: rotate(-90deg);
+}
+
+.backlinks-count {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+/* Backlink Items */
+.backlinks-item {
+  padding: 8px 12px 8px 24px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: background 0.15s ease;
+}
+
+.backlinks-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.backlinks-item-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.backlinks-item-context {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Obsidian-style mention highlighting */
+.backlinks-highlight {
+  background: rgba(139, 92, 246, 0.15);
+  color: var(--accent);
+  padding: 0 2px;
+  border-radius: 2px;
+  font-weight: 500;
+}
+
+/* Empty States */
+.backlinks-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.backlinks-empty-section {
+  padding: 12px 24px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-style: italic;
+}
+
 /* Settings Modal */
 .settings-overlay {
   position: fixed;
@@ -2706,4 +2997,441 @@ body {
 
 .about-link:hover {
   text-decoration: underline;
+}
+
+/* ============================================================================
+   Embed Styles - Obsidian-compatible ![[embed]] rendering
+   ============================================================================ */
+
+/* Base embed container */
+.milkdown-embed {
+  margin: 1em 0;
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  user-select: none;
+}
+
+.milkdown-embed.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Image embeds */
+.milkdown-embed .embed-image {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 6px;
+}
+
+/* Audio embeds */
+.milkdown-embed .embed-audio {
+  width: 100%;
+  max-width: 500px;
+  display: block;
+}
+
+/* Video embeds */
+.milkdown-embed .embed-video {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 6px;
+  background: #000;
+}
+
+/* PDF embeds */
+.milkdown-embed .embed-pdf {
+  width: 100%;
+  min-height: 400px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+}
+
+/* Note transclusion embeds */
+.milkdown-embed .embed-note {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.milkdown-embed .embed-note-header {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.milkdown-embed .embed-note-header::before {
+  content: '';
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.milkdown-embed .embed-note-content {
+  padding: 12px 16px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.milkdown-embed .embed-note-content p {
+  margin: 0 0 0.75em 0;
+}
+
+.milkdown-embed .embed-note-content p:last-child {
+  margin-bottom: 0;
+}
+
+.milkdown-embed .embed-note-content h1,
+.milkdown-embed .embed-note-content h2,
+.milkdown-embed .embed-note-content h3 {
+  margin: 0.5em 0;
+  color: var(--text-primary);
+}
+
+.milkdown-embed .embed-note-content code {
+  background: var(--bg-tertiary);
+  padding: 0.2em 0.4em;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+/* Loading state */
+.milkdown-embed .embed-loading {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+/* Broken/missing embed state */
+.milkdown-embed .embed-broken {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-secondary);
+}
+
+.milkdown-embed .embed-broken-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #f87171;
+}
+
+.milkdown-embed .embed-broken-text {
+  font-size: 13px;
+  font-style: italic;
+}
+
+/* File type specific styling hints */
+.milkdown-embed[data-file-type="image"] {
+  display: inline-block;
+}
+
+.milkdown-embed[data-file-type="audio"],
+.milkdown-embed[data-file-type="video"],
+.milkdown-embed[data-file-type="pdf"],
+.milkdown-embed[data-file-type="note"] {
+  display: block;
+}
+
+/* Hover effect for embeds */
+.milkdown-embed:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* Dark mode adjustments */
+[data-theme="light"] .milkdown-embed .embed-note {
+  background: var(--bg-secondary);
+}
+
+[data-theme="light"] .milkdown-embed .embed-broken {
+  background: var(--bg-secondary);
+}
+
+/* ============================================================================
+   Upload Progress Indicator - Drag-and-drop / Clipboard paste
+   ============================================================================ */
+
+.upload-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.upload-progress::before {
+  content: '';
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: upload-spin 1s linear infinite;
+}
+
+@keyframes upload-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ============================================================================
+   Link Autocomplete Popup - Heading and Block suggestions
+   ============================================================================ */
+
+.link-autocomplete-popup {
+  position: fixed;
+  z-index: 1000;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  max-height: 300px;
+  overflow-y: auto;
+  min-width: 200px;
+  max-width: 400px;
+}
+
+.link-autocomplete-option {
+  padding: 8px 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.15s ease;
+}
+
+.link-autocomplete-option:hover {
+  background: var(--bg-tertiary);
+}
+
+.link-autocomplete-option.selected {
+  background: var(--accent-muted);
+  color: var(--text-primary);
+}
+
+.link-autocomplete-option .heading-level {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--bg-tertiary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  min-width: 24px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.link-autocomplete-option.selected .heading-level {
+  background: var(--accent);
+  color: white;
+}
+
+.link-autocomplete-option .block-id {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: monospace;
+  flex-shrink: 0;
+}
+
+.link-autocomplete-option .autocomplete-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.link-autocomplete-option .block-preview {
+  color: var(--text-secondary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
+}
+
+/* ============================================================================
+   Backlinks Panel Anchor Display
+   ============================================================================ */
+
+.backlinks-item-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.backlinks-anchor {
+  color: var(--accent);
+  font-size: 11px;
+  font-family: monospace;
+  background: var(--accent-muted);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+/* ============================================================================
+   Wikilink Anchor Styling (optional visual distinction)
+   ============================================================================ */
+
+/* Links with heading or block anchors get subtle styling */
+.milkdown-editor .wikilink[data-heading]:not([data-heading=""]),
+.milkdown-editor .wikilink[data-block]:not([data-block=""]) {
+  text-decoration-style: dashed;
+}
+
+/* ============================================================================
+   Obsidian Highlights ==text==
+   ============================================================================ */
+
+.milkdown-editor .obsidian-highlight {
+  background-color: rgba(255, 208, 0, 0.4);
+  padding: 1px 0;
+  border-radius: 2px;
+}
+
+.milkdown-editor .highlight-delimiter {
+  font-size: 0;
+  opacity: 0;
+  width: 0;
+  display: inline-block;
+  overflow: hidden;
+}
+
+/* Light theme adjustment */
+[data-theme="light"] .milkdown-editor .obsidian-highlight {
+  background-color: rgba(255, 208, 0, 0.5);
+}
+
+/* ============================================================================
+   Obsidian Comments %%text%%
+   ============================================================================ */
+
+.milkdown-editor .obsidian-comment {
+  color: var(--text-secondary, #888);
+  opacity: 0.6;
+  font-style: italic;
+  background-color: rgba(128, 128, 128, 0.1);
+  padding: 1px 2px;
+  border-radius: 2px;
+}
+
+.milkdown-editor .comment-delimiter {
+  font-size: 0;
+  opacity: 0;
+  width: 0;
+  display: inline-block;
+  overflow: hidden;
+}
+
+/* ============================================================================
+   Obsidian Callouts > [!type]
+   ============================================================================ */
+
+/* Base callout styling applied to blockquotes */
+.milkdown-editor .callout {
+  border-left: 4px solid var(--callout-color, #448aff);
+  background: color-mix(in srgb, var(--callout-color, #448aff) 10%, transparent);
+  padding: 12px 16px;
+  margin: 8px 0;
+  border-radius: 4px;
+}
+
+/* Fallback for browsers without color-mix */
+@supports not (background: color-mix(in srgb, red 10%, transparent)) {
+  .milkdown-editor .callout {
+    background: rgba(68, 138, 255, 0.1);
+  }
+  .milkdown-editor .callout-warning,
+  .milkdown-editor .callout-caution,
+  .milkdown-editor .callout-attention {
+    background: rgba(255, 145, 0, 0.1);
+  }
+  .milkdown-editor .callout-danger,
+  .milkdown-editor .callout-error,
+  .milkdown-editor .callout-failure,
+  .milkdown-editor .callout-fail,
+  .milkdown-editor .callout-missing,
+  .milkdown-editor .callout-bug {
+    background: rgba(255, 82, 82, 0.1);
+  }
+  .milkdown-editor .callout-success,
+  .milkdown-editor .callout-check,
+  .milkdown-editor .callout-done {
+    background: rgba(0, 200, 83, 0.1);
+  }
+  .milkdown-editor .callout-tip,
+  .milkdown-editor .callout-hint,
+  .milkdown-editor .callout-important {
+    background: rgba(0, 191, 165, 0.1);
+  }
+  .milkdown-editor .callout-question,
+  .milkdown-editor .callout-help,
+  .milkdown-editor .callout-faq {
+    background: rgba(255, 171, 0, 0.1);
+  }
+  .milkdown-editor .callout-abstract,
+  .milkdown-editor .callout-summary,
+  .milkdown-editor .callout-tldr {
+    background: rgba(0, 184, 212, 0.1);
+  }
+  .milkdown-editor .callout-example {
+    background: rgba(124, 77, 255, 0.1);
+  }
+  .milkdown-editor .callout-quote,
+  .milkdown-editor .callout-cite {
+    background: rgba(158, 158, 158, 0.1);
+  }
+}
+
+/* Hide the [!type] marker and show icon */
+.milkdown-editor .callout-type-marker {
+  font-size: 0;
+  position: relative;
+}
+
+.milkdown-editor .callout-type-marker::before {
+  content: attr(data-icon) ' ';
+  font-size: 1rem;
+  margin-right: 4px;
+}
+
+/* Override default blockquote styling inside callouts */
+.milkdown-editor .callout {
+  border-left-width: 4px;
+  color: var(--text-primary);
+}
+
+.milkdown-editor .callout p {
+  margin: 0;
+}
+
+/* Nested paragraphs in callouts */
+.milkdown-editor .callout p + p {
+  margin-top: 0.5em;
 }

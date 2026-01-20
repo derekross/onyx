@@ -2404,6 +2404,7 @@ dependencies = [
  "log",
  "notify",
  "parking_lot",
+ "percent-encoding",
  "portable-pty",
  "serde",
  "serde_json",

@@ -15,6 +15,7 @@ use tauri::{AppHandle, Emitter, Manager};
 #[cfg(not(target_os = "android"))]
 use keyring::Entry;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher, EventKind};
+use percent_encoding::percent_decode_str;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AppSettings {
@@ -98,6 +99,29 @@ pub struct FileEntry {
     children: Option<Vec<FileEntry>>,
 }
 
+// Asset entry for embedded files (images, audio, video, PDF)
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AssetEntry {
+    pub name: String,
+    pub path: String,
+    pub extension: String,
+    pub relative_path: String,
+}
+
+// Supported asset extensions
+const IMAGE_EXTENSIONS: &[&str] = &["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"];
+const AUDIO_EXTENSIONS: &[&str] = &["flac", "m4a", "mp3", "ogg", "wav", "webm", "3gp"];
+const VIDEO_EXTENSIONS: &[&str] = &["mkv", "mov", "mp4", "ogv", "webm"];
+const PDF_EXTENSIONS: &[&str] = &["pdf"];
+
+fn is_embeddable_extension(ext: &str) -> bool {
+    let ext_lower = ext.to_lowercase();
+    IMAGE_EXTENSIONS.contains(&ext_lower.as_str())
+        || AUDIO_EXTENSIONS.contains(&ext_lower.as_str())
+        || VIDEO_EXTENSIONS.contains(&ext_lower.as_str())
+        || PDF_EXTENSIONS.contains(&ext_lower.as_str())
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SearchMatch {
     line: usize,
@@ -177,6 +201,20 @@ fn read_file(path: String) -> Result<String, String> {
 #[tauri::command]
 fn write_file(path: String, content: String) -> Result<(), String> {
     fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn write_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    // Create parent directories if needed
+    if let Some(parent) = Path::new(&path).parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(&path, data).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
+    fs::read(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -345,6 +383,61 @@ fn search_files(path: String, query: String) -> Result<Vec<SearchResult>, String
     // Limit results
     results.truncate(50);
     Ok(results)
+}
+
+#[tauri::command]
+fn list_assets(path: String) -> Result<Vec<AssetEntry>, String> {
+    let mut assets: Vec<AssetEntry> = Vec::new();
+    let vault_path = Path::new(&path);
+
+    if !vault_path.exists() {
+        return Err("Path does not exist".to_string());
+    }
+
+    for entry in WalkDir::new(&path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+    {
+        let file_path = entry.path();
+
+        // Skip hidden files
+        if let Some(name) = file_path.file_name() {
+            if name.to_string_lossy().starts_with('.') {
+                continue;
+            }
+        }
+
+        // Check if it's an embeddable file type
+        if let Some(ext) = file_path.extension() {
+            let ext_str = ext.to_string_lossy().to_string();
+            if is_embeddable_extension(&ext_str) {
+                let name = file_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+
+                let full_path = file_path.to_string_lossy().to_string();
+
+                // Calculate relative path from vault root
+                let relative_path = file_path
+                    .strip_prefix(vault_path)
+                    .unwrap_or(file_path)
+                    .to_string_lossy()
+                    .to_string();
+
+                assets.push(AssetEntry {
+                    name,
+                    path: full_path,
+                    extension: ext_str.to_lowercase(),
+                    relative_path,
+                });
+            }
+        }
+    }
+
+    Ok(assets)
 }
 
 #[tauri::command]
@@ -799,6 +892,58 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(Arc::new(Mutex::new(PtyState::default())) as SharedPtyState)
         .manage(Arc::new(Mutex::new(WatcherState::default())) as SharedWatcherState)
+        // Register asset protocol to serve local files
+        .register_uri_scheme_protocol("asset", |_app, request| {
+            let path = request.uri().path();
+            // URL decode the path
+            let decoded_path = percent_decode_str(path).decode_utf8_lossy().to_string();
+            // On Windows, path might start with / before drive letter, remove it
+            #[cfg(target_os = "windows")]
+            let decoded_path = if decoded_path.starts_with('/') && decoded_path.len() > 2 && decoded_path.chars().nth(2) == Some(':') {
+                decoded_path[1..].to_string()
+            } else {
+                decoded_path
+            };
+
+            match fs::read(&decoded_path) {
+                Ok(data) => {
+                    // Determine MIME type based on extension
+                    let mime = match Path::new(&decoded_path).extension().and_then(|e| e.to_str()) {
+                        Some("png") => "image/png",
+                        Some("jpg") | Some("jpeg") => "image/jpeg",
+                        Some("gif") => "image/gif",
+                        Some("webp") => "image/webp",
+                        Some("svg") => "image/svg+xml",
+                        Some("bmp") => "image/bmp",
+                        Some("avif") => "image/avif",
+                        Some("mp3") => "audio/mpeg",
+                        Some("wav") => "audio/wav",
+                        Some("ogg") => "audio/ogg",
+                        Some("flac") => "audio/flac",
+                        Some("m4a") => "audio/mp4",
+                        Some("webm") => "video/webm",
+                        Some("mp4") => "video/mp4",
+                        Some("mkv") => "video/x-matroska",
+                        Some("mov") => "video/quicktime",
+                        Some("ogv") => "video/ogg",
+                        Some("pdf") => "application/pdf",
+                        _ => "application/octet-stream",
+                    };
+                    tauri::http::Response::builder()
+                        .status(200)
+                        .header("Content-Type", mime)
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(data)
+                        .unwrap()
+                }
+                Err(_) => {
+                    tauri::http::Response::builder()
+                        .status(404)
+                        .body(Vec::new())
+                        .unwrap()
+                }
+            }
+        })
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -811,8 +956,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_files,
+            list_assets,
             read_file,
             write_file,
+            write_binary_file,
+            read_binary_file,
             create_file,
             create_folder,
             delete_file,

@@ -7,11 +7,15 @@ import SearchPanel from './components/SearchPanel';
 import OpenCodeTerminal from './components/OpenCodeTerminal';
 import Settings from './components/Settings';
 import GraphView from './components/GraphView';
+import OutlinePanel from './components/OutlinePanel';
+import BacklinksPanel from './components/BacklinksPanel';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getSyncEngine, getCurrentLogin } from './lib/nostr';
 import { getSignerFromStoredLogin } from './lib/nostr/signer';
-import { buildNoteIndex, resolveWikilink, NoteIndex, FileEntry } from './lib/editor/note-index';
+import { buildNoteIndex, resolveWikilink, NoteIndex, FileEntry, NoteGraph, buildNoteGraph } from './lib/editor/note-index';
+import { HeadingInfo } from './lib/editor/heading-plugin';
+import { AssetIndex, AssetEntry, buildAssetIndex } from './lib/editor/asset-index';
 
 interface Tab {
   path: string;
@@ -44,7 +48,38 @@ const App: Component = () => {
   let setSearchQuery: ((query: string) => void) | null = null;
   const [scrollToLine, setScrollToLine] = createSignal<number | null>(null);
   const [noteIndex, setNoteIndex] = createSignal<NoteIndex | null>(null);
-  const [isResizing, setIsResizing] = createSignal<'sidebar' | 'terminal' | null>(null);
+  const [assetIndex, setAssetIndex] = createSignal<AssetIndex | null>(null);
+  const [isResizing, setIsResizing] = createSignal<'sidebar' | 'terminal' | 'outline' | 'backlinks' | null>(null);
+
+  // Backlinks panel state
+  const [showBacklinks, setShowBacklinks] = createSignal(
+    localStorage.getItem('show_backlinks') === 'true'
+  );
+  const [backlinksWidth, setBacklinksWidth] = createSignal(
+    parseInt(localStorage.getItem('backlinks_width') || '250')
+  );
+
+  // Note graph and file contents for backlinks
+  const [noteGraph, setNoteGraph] = createSignal<NoteGraph | null>(null);
+  const [fileContents, setFileContents] = createSignal<Map<string, string>>(new Map());
+
+  // Outline panel state
+  const [showOutline, setShowOutline] = createSignal(
+    localStorage.getItem('show_outline') === 'true'
+  );
+  const [outlineWidth, setOutlineWidth] = createSignal(
+    parseInt(localStorage.getItem('outline_width') || '250')
+  );
+
+  // Heading state from editor plugin
+  const [currentHeadings, setCurrentHeadings] = createSignal<HeadingInfo[]>([]);
+  const [activeHeadingId, setActiveHeadingId] = createSignal<string | null>(null);
+  const [scrollToHeadingId, setScrollToHeadingId] = createSignal<string | null>(null);
+
+  // Anchor navigation state (for wikilink #heading and ^blockid references)
+  const [scrollToHeadingText, setScrollToHeadingText] = createSignal<string | null>(null);
+  const [scrollToBlockId, setScrollToBlockId] = createSignal<string | null>(null);
+
   const [resizeStartX, setResizeStartX] = createSignal(0);
   const [resizeStartWidth, setResizeStartWidth] = createSignal(0);
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false);
@@ -125,6 +160,13 @@ const App: Component = () => {
         } catch (err) {
           console.error('Failed to build initial note index:', err);
         }
+        // Build asset index for embed resolution
+        try {
+          const assets = await invoke<AssetEntry[]>('list_assets', { path: settings.vault_path });
+          setAssetIndex(buildAssetIndex(assets, settings.vault_path));
+        } catch (err) {
+          console.error('Failed to build initial asset index:', err);
+        }
       }
       if (settings.show_terminal) {
         setShowTerminal(true);
@@ -184,6 +226,57 @@ const App: Component = () => {
     }).catch(console.error);
   });
 
+  // Persist outline panel state
+  createEffect(() => {
+    localStorage.setItem('show_outline', showOutline().toString());
+  });
+  createEffect(() => {
+    localStorage.setItem('outline_width', outlineWidth().toString());
+  });
+
+  // Persist backlinks panel state
+  createEffect(() => {
+    localStorage.setItem('show_backlinks', showBacklinks().toString());
+  });
+  createEffect(() => {
+    localStorage.setItem('backlinks_width', backlinksWidth().toString());
+  });
+
+  // Build note graph and cache file contents for backlinks
+  createEffect(async () => {
+    const index = noteIndex();
+    const vault = vaultPath();
+    if (!index || !vault) {
+      setNoteGraph(null);
+      setFileContents(new Map());
+      return;
+    }
+
+    try {
+      const contents = new Map<string, string>();
+
+      // Read all files and cache contents
+      const readFile = async (path: string) => {
+        const content = await invoke<string>('read_file', { path });
+        contents.set(path, content);
+        return content;
+      };
+
+      const graph = await buildNoteGraph(vault, index, readFile);
+      setNoteGraph(graph);
+      setFileContents(contents);
+    } catch (err) {
+      console.error('Failed to build note graph:', err);
+    }
+  });
+
+  // Clear headings when switching tabs
+  createEffect(() => {
+    activeTabIndex(); // Dependency
+    setCurrentHeadings([]);
+    setActiveHeadingId(null);
+  });
+
   const currentTab = () => {
     const idx = activeTabIndex();
     return idx >= 0 ? tabs()[idx] : null;
@@ -219,7 +312,9 @@ const App: Component = () => {
     try {
       const content = await invoke<string>('read_file', { path });
       // Strip .md extension for display name
-      const name = (path.split('/').pop() || 'Untitled').replace(/\.md$/i, '');
+      // Handle both Unix (/) and Windows (\) path separators
+      const parts = path.split(/[/\\]/);
+      const name = (parts[parts.length - 1] || 'Untitled').replace(/\.md$/i, '');
 
       setTabs([...tabs(), { path, name, content, isDirty: false }]);
       setActiveTabIndex(tabs().length); // Will be the new last index after state updates
@@ -331,6 +426,12 @@ const App: Component = () => {
       } else if (isMod && e.key === '`') {
         e.preventDefault();
         setShowTerminal(!showTerminal());
+      } else if (isMod && e.shiftKey && e.key === 'O') {
+        e.preventDefault();
+        setShowOutline(!showOutline());
+      } else if (isMod && e.shiftKey && e.key === 'B') {
+        e.preventDefault();
+        setShowBacklinks(!showBacklinks());
       } else if (e.key === 'Escape') {
         setShowQuickSwitcher(false);
         setShowCommandPalette(false);
@@ -393,7 +494,7 @@ const App: Component = () => {
     }
   };
 
-  // Build/rebuild note index for wikilink resolution
+  // Build/rebuild note index for wikilink resolution and asset index for embeds
   const rebuildNoteIndex = async () => {
     const path = vaultPath();
     if (!path) return;
@@ -403,13 +504,42 @@ const App: Component = () => {
     } catch (err) {
       console.error('Failed to build note index:', err);
     }
+    // Also rebuild asset index
+    try {
+      const assets = await invoke<AssetEntry[]>('list_assets', { path });
+      setAssetIndex(buildAssetIndex(assets, path));
+    } catch (err) {
+      console.error('Failed to build asset index:', err);
+    }
   };
 
   // Handle wikilink clicks from editor
-  const handleWikilinkClick = async (target: string) => {
+  const handleWikilinkClick = async (
+    target: string,
+    heading?: string | null,
+    blockId?: string | null
+  ) => {
     const index = noteIndex();
     const vault = vaultPath();
     if (!vault) return;
+
+    // Clear previous anchor state first (allows re-triggering same anchor)
+    setScrollToHeadingText(null);
+    setScrollToBlockId(null);
+
+    // Same-note reference (empty target) - now handled directly in wikilink plugin
+    // This branch is kept for any edge cases where same-note refs still come through
+    if (!target) {
+      // Small delay to ensure clear takes effect before setting new value
+      setTimeout(() => {
+        if (heading) {
+          setScrollToHeadingText(heading);
+        } else if (blockId) {
+          setScrollToBlockId(blockId);
+        }
+      }, 10);
+      return;
+    }
 
     // Resolve the wikilink to a file path
     const resolved = resolveWikilink(
@@ -422,8 +552,20 @@ const App: Component = () => {
     if (resolved.exists && resolved.path) {
       // Open existing note
       await openFile(resolved.path);
+
+      // After opening, navigate to anchor if specified
+      // Use setTimeout to allow the editor to load the content first
+      if (heading || blockId) {
+        setTimeout(() => {
+          if (heading) {
+            setScrollToHeadingText(heading);
+          } else if (blockId) {
+            setScrollToBlockId(blockId);
+          }
+        }, 200);
+      }
     } else if (resolved.path) {
-      // Create new note
+      // Create new note (no anchor navigation for new notes)
       try {
         await invoke('create_file', { path: resolved.path });
         await openFile(resolved.path);
@@ -545,6 +687,8 @@ const App: Component = () => {
     { id: 'quick-switcher', name: 'Quick Switcher', shortcut: 'Ctrl+O', action: () => setShowQuickSwitcher(true) },
     { id: 'search', name: 'Search in Files', shortcut: 'Ctrl+Shift+F', action: () => setShowSearch(true) },
     { id: 'toggle-terminal', name: 'Toggle Terminal', shortcut: 'Ctrl+`', action: () => setShowTerminal(!showTerminal()) },
+    { id: 'toggle-outline', name: 'Toggle Outline', shortcut: 'Ctrl+Shift+O', action: () => setShowOutline(!showOutline()) },
+    { id: 'toggle-backlinks', name: 'Toggle Backlinks', shortcut: 'Ctrl+Shift+B', action: () => setShowBacklinks(!showBacklinks()) },
     { id: 'close-tab', name: 'Close Tab', action: () => activeTabIndex() >= 0 && closeTab(activeTabIndex()) },
   ];
 
@@ -567,6 +711,24 @@ const App: Component = () => {
     document.body.style.userSelect = 'none';
   };
 
+  const handleOutlineResizeStart = (e: MouseEvent) => {
+    e.preventDefault();
+    setIsResizing('outline');
+    setResizeStartX(e.clientX);
+    setResizeStartWidth(outlineWidth());
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
+  const handleBacklinksResizeStart = (e: MouseEvent) => {
+    e.preventDefault();
+    setIsResizing('backlinks');
+    setResizeStartX(e.clientX);
+    setResizeStartWidth(backlinksWidth());
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
   const handleResizeMove = (e: MouseEvent) => {
     const target = isResizing();
     if (!target) return;
@@ -581,6 +743,16 @@ const App: Component = () => {
       const delta = resizeStartX() - e.clientX;
       const newWidth = resizeStartWidth() + delta;
       setTerminalWidth(Math.max(300, Math.min(800, newWidth)));
+    } else if (target === 'outline') {
+      // Outline: dragging left = wider panel (same as terminal)
+      const delta = resizeStartX() - e.clientX;
+      const newWidth = resizeStartWidth() + delta;
+      setOutlineWidth(Math.max(180, Math.min(400, newWidth)));
+    } else if (target === 'backlinks') {
+      // Backlinks: dragging left = wider panel (same as terminal)
+      const delta = resizeStartX() - e.clientX;
+      const newWidth = resizeStartWidth() + delta;
+      setBacklinksWidth(Math.max(180, Math.min(400, newWidth)));
     }
   };
 
@@ -646,6 +818,31 @@ const App: Component = () => {
             <circle cx="18" cy="18" r="3"></circle>
             <line x1="8.5" y1="7.5" x2="15.5" y2="16.5"></line>
             <line x1="15.5" y1="7.5" x2="8.5" y2="16.5"></line>
+          </svg>
+        </button>
+        <button
+          class={`icon-btn ${showOutline() ? 'active' : ''}`}
+          onClick={() => setShowOutline(!showOutline())}
+          title="Outline (Ctrl+Shift+O)"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="8" y1="6" x2="21" y2="6"></line>
+            <line x1="8" y1="12" x2="21" y2="12"></line>
+            <line x1="8" y1="18" x2="21" y2="18"></line>
+            <line x1="3" y1="6" x2="3.01" y2="6"></line>
+            <line x1="3" y1="12" x2="3.01" y2="12"></line>
+            <line x1="3" y1="18" x2="3.01" y2="18"></line>
+          </svg>
+        </button>
+        <button
+          class={`icon-btn ${showBacklinks() ? 'active' : ''}`}
+          onClick={() => setShowBacklinks(!showBacklinks())}
+          title="Backlinks (Ctrl+Shift+B)"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 17H7A5 5 0 0 1 7 7h2"></path>
+            <path d="M15 7h2a5 5 0 1 1 0 10h-2"></path>
+            <line x1="8" y1="12" x2="16" y2="12"></line>
           </svg>
         </button>
         <div class="icon-bar-spacer"></div>
@@ -777,6 +974,24 @@ const App: Component = () => {
                 onScrollComplete={() => setScrollToLine(null)}
                 onWikilinkClick={handleWikilinkClick}
                 noteIndex={noteIndex()}
+                assetIndex={assetIndex()}
+                fileContents={fileContents()}
+                onHeadingsChange={setCurrentHeadings}
+                onActiveHeadingChange={setActiveHeadingId}
+                scrollToHeadingId={scrollToHeadingId()}
+                scrollToHeadingText={scrollToHeadingText()}
+                scrollToBlockId={scrollToBlockId()}
+                onFilesUploaded={async () => {
+                  // Rebuild asset index after files are uploaded
+                  if (vaultPath()) {
+                    try {
+                      const assets = await invoke<AssetEntry[]>('list_assets', { path: vaultPath() });
+                      setAssetIndex(buildAssetIndex(assets, vaultPath()!));
+                    } catch (err) {
+                      console.error('Failed to rebuild asset index after upload:', err);
+                    }
+                  }
+                }}
               />
             }>
               <GraphView
@@ -787,6 +1002,43 @@ const App: Component = () => {
               />
             </Show>
           </div>
+
+          {/* Outline Panel - Right Side */}
+          <Show when={showOutline() && currentTab()}>
+            <div
+              class="resize-handle"
+              onMouseDown={handleOutlineResizeStart}
+            />
+            <div class="outline-panel-container" style={{ width: `${outlineWidth()}px` }}>
+              <OutlinePanel
+                headings={currentHeadings()}
+                activeHeadingId={activeHeadingId()}
+                onHeadingClick={(id) => {
+                  setScrollToHeadingId(id);
+                  setTimeout(() => setScrollToHeadingId(null), 100);
+                }}
+                onClose={() => setShowOutline(false)}
+              />
+            </div>
+          </Show>
+
+          {/* Backlinks Panel - Right Side */}
+          <Show when={showBacklinks() && currentTab()}>
+            <div
+              class="resize-handle"
+              onMouseDown={handleBacklinksResizeStart}
+            />
+            <div class="backlinks-panel-container" style={{ width: `${backlinksWidth()}px` }}>
+              <BacklinksPanel
+                currentFilePath={currentTab()?.path || null}
+                currentFileName={currentTab()?.name || null}
+                graph={noteGraph()}
+                fileContents={fileContents()}
+                onBacklinkClick={(path, line) => openFile(path, line)}
+                onClose={() => setShowBacklinks(false)}
+              />
+            </div>
+          </Show>
 
           {/* OpenCode Terminal Panel - Right Side */}
           <Show when={showTerminal()}>
