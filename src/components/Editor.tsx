@@ -1,5 +1,5 @@
 import { Component, onCleanup, Show, createSignal, createEffect, on } from 'solid-js';
-import { Editor, rootCtx, defaultValueCtx, editorViewCtx } from '@milkdown/core';
+import { Editor, rootCtx, defaultValueCtx, editorViewCtx, parserCtx } from '@milkdown/core';
 import { commonmark } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
 import { nord } from '@milkdown/theme-nord';
@@ -74,6 +74,8 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
   let scrollDebounce: number | null = null;
   let scrollHandler: (() => void) | null = null;
   let unlistenDragDrop: UnlistenFn | null = null;
+  // Track the last content we set in the editor to detect external changes
+  let lastEditorContent: string = '';
 
   const saveFile = async () => {
     if (!props.filePath || saving()) return;
@@ -140,7 +142,9 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       .use(calloutPlugin)
       // Configure listener after the plugin is loaded
       .config((ctx) => {
-        ctx.get(listenerCtx).markdownUpdated((ctx, markdown, prevMarkdown) => {
+        ctx.get(listenerCtx).markdownUpdated((ctx, markdown, _prevMarkdown) => {
+          // Track the content for detecting external changes
+          lastEditorContent = markdown;
           props.onContentChange(markdown);
 
           // Export headings from plugin state
@@ -151,6 +155,8 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       })
       .create();
 
+    // Initialize lastEditorContent with the initial content
+    lastEditorContent = initialContent;
     return editorInstance;
   };
 
@@ -349,7 +355,7 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
   createEffect(
     on(
       () => props.filePath,
-      async (filePath, prevPath) => {
+      async (filePath, _prevPath) => {
         if (filePath && filePath !== currentPath() && containerRef) {
           setCurrentPath(filePath);
 
@@ -411,6 +417,41 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
           setTimeout(() => {
             scrollToLineNumber(line);
           }, 50);
+        }
+      }
+    )
+  );
+
+  // Handle external content changes (e.g., from OpenCode or file watcher)
+  createEffect(
+    on(
+      () => props.content,
+      (newContent) => {
+        // Only update if:
+        // 1. We have an editor instance
+        // 2. The file path matches (same file)
+        // 3. The content is different from what the editor currently has
+        if (
+          editorInstance?.ctx &&
+          props.filePath === currentPath() &&
+          newContent !== lastEditorContent
+        ) {
+          console.log('[Editor] External content change detected, updating editor');
+          try {
+            // Replace the editor content with the new markdown
+            editorInstance.action((ctx) => {
+              const view = ctx.get(editorViewCtx);
+              const parser = ctx.get(parserCtx);
+              const doc = parser(newContent);
+              if (doc) {
+                const tr = view.state.tr.replaceWith(0, view.state.doc.content.size, doc.content);
+                view.dispatch(tr);
+                lastEditorContent = newContent;
+              }
+            });
+          } catch (err) {
+            console.error('[Editor] Failed to update content:', err);
+          }
         }
       }
     )

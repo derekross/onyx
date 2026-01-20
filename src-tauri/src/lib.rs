@@ -1,3 +1,10 @@
+#[cfg(not(target_os = "android"))]
+use keyring::Entry;
+use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use parking_lot::Mutex;
+use percent_encoding::percent_decode_str;
+#[cfg(not(target_os = "android"))]
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Read;
@@ -7,15 +14,8 @@ use std::sync::Arc;
 #[cfg(not(target_os = "android"))]
 use std::thread;
 use std::time::Duration;
-use walkdir::WalkDir;
-use parking_lot::Mutex;
-#[cfg(not(target_os = "android"))]
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tauri::{AppHandle, Emitter, Manager};
-#[cfg(not(target_os = "android"))]
-use keyring::Entry;
-use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher, EventKind};
-use percent_encoding::percent_decode_str;
+use walkdir::WalkDir;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AppSettings {
@@ -52,11 +52,15 @@ fn get_platform_info(app: AppHandle) -> PlatformInfo {
 
     let default_vault_path = if cfg!(target_os = "android") || cfg!(target_os = "ios") {
         // On mobile, use the app's data directory
-        app.path().app_data_dir().ok()
+        app.path()
+            .app_data_dir()
+            .ok()
             .map(|p| p.join("Onyx").to_string_lossy().to_string())
     } else {
         // On desktop, use Documents/Onyx
-        app.path().document_dir().ok()
+        app.path()
+            .document_dir()
+            .ok()
             .map(|p| p.join("Onyx").to_string_lossy().to_string())
     };
 
@@ -258,7 +262,9 @@ fn copy_file(source: String, dest: String) -> Result<(), String> {
         // Copy directory recursively
         copy_dir_recursive(source_path, dest_path).map_err(|e| e.to_string())
     } else {
-        fs::copy(&source, &dest).map(|_| ()).map_err(|e| e.to_string())
+        fs::copy(&source, &dest)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -346,11 +352,7 @@ fn search_files(path: String, query: String) -> Result<Vec<SearchResult>, String
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
-            e.path().is_file()
-                && e.path()
-                    .extension()
-                    .map(|ext| ext == "md")
-                    .unwrap_or(false)
+            e.path().is_file() && e.path().extension().map(|ext| ext == "md").unwrap_or(false)
         })
     {
         let file_path = entry.path();
@@ -536,11 +538,7 @@ mod pty {
                 format!("{}/.opencode/bin", home),
                 format!("{}/.nvm/versions/node/*/bin", home), // Common node location
             ];
-            let enhanced_path = format!(
-                "{}:{}:/usr/local/bin",
-                user_paths.join(":"),
-                current_path
-            );
+            let enhanced_path = format!("{}:{}:/usr/local/bin", user_paths.join(":"), current_path);
             cmd.env("PATH", enhanced_path);
         }
 
@@ -641,7 +639,10 @@ mod pty {
     }
 
     #[tauri::command]
-    pub fn kill_pty(state: tauri::State<'_, SharedPtyState>, session_id: String) -> Result<(), String> {
+    pub fn kill_pty(
+        state: tauri::State<'_, SharedPtyState>,
+        session_id: String,
+    ) -> Result<(), String> {
         let mut state = state.lock();
         if state.sessions.remove(&session_id).is_some() {
             Ok(())
@@ -652,7 +653,7 @@ mod pty {
 }
 
 #[cfg(not(target_os = "android"))]
-use pty::{SharedPtyState, PtyState};
+use pty::{PtyState, SharedPtyState};
 
 // Stub PTY functions for Android
 #[cfg(target_os = "android")]
@@ -661,7 +662,9 @@ mod pty {
 
     pub struct PtyState;
     impl Default for PtyState {
-        fn default() -> Self { Self }
+        fn default() -> Self {
+            Self
+        }
     }
     pub type SharedPtyState = Arc<Mutex<PtyState>>;
 
@@ -697,13 +700,16 @@ mod pty {
     }
 
     #[tauri::command]
-    pub fn kill_pty(_state: tauri::State<'_, SharedPtyState>, _session_id: String) -> Result<(), String> {
+    pub fn kill_pty(
+        _state: tauri::State<'_, SharedPtyState>,
+        _session_id: String,
+    ) -> Result<(), String> {
         Err("PTY not supported on Android".to_string())
     }
 }
 
 #[cfg(target_os = "android")]
-use pty::{SharedPtyState, PtyState};
+use pty::{PtyState, SharedPtyState};
 
 // File watcher for detecting changes
 struct WatcherState {
@@ -734,9 +740,10 @@ fn start_watching(
         move |res: Result<notify::Event, notify::Error>| {
             if let Ok(event) = res {
                 // Only emit for create, modify, remove events on .md files
-                let dominated_by_md = event.paths.iter().any(|p| {
-                    p.extension().map(|e| e == "md").unwrap_or(false)
-                });
+                let dominated_by_md = event
+                    .paths
+                    .iter()
+                    .any(|p| p.extension().map(|e| e == "md").unwrap_or(false));
 
                 let dominated_by_dir = event.paths.iter().any(|p| p.is_dir());
 
@@ -744,6 +751,16 @@ fn start_watching(
                     match event.kind {
                         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
                             let _ = app_clone.emit("files-changed", ());
+                            // Also emit specific file paths for open tab reload
+                            let paths: Vec<String> = event
+                                .paths
+                                .iter()
+                                .filter(|p| p.extension().map(|e| e == "md").unwrap_or(false))
+                                .filter_map(|p| p.to_str().map(|s| s.to_string()))
+                                .collect();
+                            if !paths.is_empty() {
+                                let _ = app_clone.emit("file-modified", paths);
+                            }
                         }
                         _ => {}
                     }
@@ -775,7 +792,10 @@ fn stop_watching(state: tauri::State<'_, SharedWatcherState>) -> Result<(), Stri
 // Skills directory management
 fn get_skills_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".config").join("opencode").join("skills")
+    PathBuf::from(home)
+        .join(".config")
+        .join("opencode")
+        .join("skills")
 }
 
 #[tauri::command]
@@ -899,7 +919,10 @@ pub fn run() {
             let decoded_path = percent_decode_str(path).decode_utf8_lossy().to_string();
             // On Windows, path might start with / before drive letter, remove it
             #[cfg(target_os = "windows")]
-            let decoded_path = if decoded_path.starts_with('/') && decoded_path.len() > 2 && decoded_path.chars().nth(2) == Some(':') {
+            let decoded_path = if decoded_path.starts_with('/')
+                && decoded_path.len() > 2
+                && decoded_path.chars().nth(2) == Some(':')
+            {
                 decoded_path[1..].to_string()
             } else {
                 decoded_path
@@ -908,7 +931,10 @@ pub fn run() {
             match fs::read(&decoded_path) {
                 Ok(data) => {
                     // Determine MIME type based on extension
-                    let mime = match Path::new(&decoded_path).extension().and_then(|e| e.to_str()) {
+                    let mime = match Path::new(&decoded_path)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                    {
                         Some("png") => "image/png",
                         Some("jpg") | Some("jpeg") => "image/jpeg",
                         Some("gif") => "image/gif",
@@ -936,12 +962,10 @@ pub fn run() {
                         .body(data)
                         .unwrap()
                 }
-                Err(_) => {
-                    tauri::http::Response::builder()
-                        .status(404)
-                        .body(Vec::new())
-                        .unwrap()
-                }
+                Err(_) => tauri::http::Response::builder()
+                    .status(404)
+                    .body(Vec::new())
+                    .unwrap(),
             }
         })
         .setup(|app| {

@@ -181,6 +181,7 @@ const App: Component = () => {
 
     // Set up file change listener
     let unlistenFn: (() => void) | null = null;
+    let unlistenFileModified: (() => void) | null = null;
 
     listen('files-changed', () => {
       // Debounce refreshes to avoid too many updates
@@ -196,9 +197,42 @@ const App: Component = () => {
       unlistenFn = unlisten;
     });
 
+    // Listen for specific file modifications to reload open tabs
+    listen<string[]>('file-modified', async (event) => {
+      const modifiedPaths = event.payload;
+      const currentTabs = tabs();
+      console.log('[file-modified] Received paths:', modifiedPaths);
+      console.log('[file-modified] Current tabs:', currentTabs.map(t => t.path));
+
+      for (const modifiedPath of modifiedPaths) {
+        const tabIndex = currentTabs.findIndex(tab => tab.path === modifiedPath);
+        console.log('[file-modified] Checking path:', modifiedPath, 'tabIndex:', tabIndex);
+        if (tabIndex !== -1) {
+          const tab = currentTabs[tabIndex];
+          console.log('[file-modified] Tab found, isDirty:', tab.isDirty);
+          // Only reload if the tab is not dirty (no unsaved changes)
+          if (!tab.isDirty) {
+            try {
+              const newContent = await invoke<string>('read_file', { path: modifiedPath });
+              console.log('[file-modified] Reloading tab with new content, length:', newContent.length);
+              // Update tab content
+              setTabs(prevTabs => prevTabs.map((t, i) =>
+                i === tabIndex ? { ...t, content: newContent } : t
+              ));
+            } catch (err) {
+              console.error('Failed to reload file:', modifiedPath, err);
+            }
+          }
+        }
+      }
+    }).then(unlisten => {
+      unlistenFileModified = unlisten;
+    });
+
     // Cleanup must be registered synchronously
     onCleanup(() => {
       unlistenFn?.();
+      unlistenFileModified?.();
       invoke('stop_watching').catch(() => {});
     });
   });
