@@ -356,11 +356,37 @@ class SimpleNRelay1Adapter {
 
   req(filters: any[], options?: { signal?: AbortSignal }): AsyncIterable<[string, string, any]> {
     console.log('[NIP-46] NRelay1 subscribing with filters:', JSON.stringify(filters));
-    return this.relay.req(filters, options);
+    const self = this;
+    const originalReq = this.relay.req(filters, options);
+    
+    // Wrap the async iterable to log messages
+    return {
+      async *[Symbol.asyncIterator]() {
+        console.log('[NIP-46] Starting to iterate messages from relay...');
+        try {
+          for await (const msg of originalReq) {
+            console.log('[NIP-46] NRelay1 received:', msg[0], msg[1]?.slice?.(0, 8) || msg[1]);
+            if (msg[0] === 'EVENT') {
+              const event = msg[2];
+              console.log('[NIP-46] EVENT details:', {
+                id: event.id?.slice(0, 8),
+                kind: event.kind,
+                pubkey: event.pubkey?.slice(0, 8),
+              });
+            }
+            yield msg;
+          }
+        } catch (e) {
+          console.error('[NIP-46] Error in relay req iterator:', e);
+          throw e;
+        }
+        console.log('[NIP-46] Relay req iterator ended');
+      }
+    };
   }
 
   async event(event: NostrEvent, options?: { signal?: AbortSignal }): Promise<void> {
-    console.log('[NIP-46] NRelay1 publishing event kind:', event.kind);
+    console.log('[NIP-46] NRelay1 publishing event kind:', event.kind, 'id:', event.id?.slice(0, 8));
     await this.relay.event(event, options);
     console.log('[NIP-46] NRelay1 event published successfully');
   }
