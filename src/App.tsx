@@ -48,6 +48,7 @@ const App: Component = () => {
   const [showSearch, setShowSearch] = createSignal(false);
   const [showTerminal, setShowTerminal] = createSignal(false);
   const [showSettings, setShowSettings] = createSignal(false);
+  const [settingsSection, setSettingsSection] = createSignal<string | undefined>(undefined);
   const [showGraphView, setShowGraphView] = createSignal(false);
   const [terminalWidth, setTerminalWidth] = createSignal(500);
   const [sidebarWidth, setSidebarWidth] = createSignal(260);
@@ -1320,6 +1321,10 @@ const App: Component = () => {
                 vaultPath={vaultPath()}
                 currentFile={currentTab() ? { path: currentTab()!.path, content: currentTab()!.content } : null}
                 onClose={() => setShowTerminal(false)}
+                onOpenSettings={() => {
+                  setSettingsSection('opencode');
+                  setShowSettings(true);
+                }}
               />
             </div>
           </Show>
@@ -1409,10 +1414,14 @@ const App: Component = () => {
 
       <Show when={showSettings()}>
         <Settings
-          onClose={() => setShowSettings(false)}
+          onClose={() => {
+            setShowSettings(false);
+            setSettingsSection(undefined);
+          }}
           vaultPath={vaultPath()}
           onSyncComplete={() => refreshSidebar?.()}
           onSyncEnabledChange={(enabled) => setSyncStatus(enabled ? 'idle' : 'off')}
+          initialSection={settingsSection() as 'general' | 'editor' | 'files' | 'appearance' | 'hotkeys' | 'opencode' | 'productivity' | 'sync' | 'nostr' | 'about' | undefined}
         />
       </Show>
 
