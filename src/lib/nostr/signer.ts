@@ -6,7 +6,7 @@
  * - Remote signing via NIP-46 bunker (NConnectSigner)
  */
 
-import { NConnectSigner, NSecSigner } from '@nostrify/nostrify';
+import { NConnectSigner, NSecSigner, NRelay1 } from '@nostrify/nostrify';
 import type { NostrEvent, NostrSigner as BaseNostrSigner } from '@nostrify/nostrify';
 import { nip19 } from 'nostr-tools';
 
@@ -100,7 +100,18 @@ class NIP46WebSocket {
         this.ws.onmessage = (e) => {
           try {
             const msg = JSON.parse(e.data);
-            console.log('[NIP-46] Received message:', msg[0], msg[1]);
+            if (msg[0] === 'EVENT') {
+              const event = msg[2];
+              console.log('[NIP-46] Received EVENT:', {
+                id: event.id?.slice(0, 8),
+                kind: event.kind,
+                pubkey: event.pubkey?.slice(0, 8),
+                pTag: event.tags?.find((t: string[]) => t[0] === 'p')?.[1]?.slice(0, 8),
+                contentPreview: event.content?.slice(0, 50),
+              });
+            } else {
+              console.log('[NIP-46] Received message:', msg[0], msg[1]);
+            }
             for (const handler of this.messageHandlers) {
               handler(msg);
             }
@@ -244,7 +255,7 @@ class RelayGroupAdapter {
           socket.send(reqMsg);
         }
         
-        console.log('[NIP-46] Subscribed with filters:', filtersWithSince);
+        console.log('[NIP-46] Subscribed (subId=' + subId + ') with filters:', JSON.stringify(filtersWithSince));
 
         // Cleanup function
         const cleanup = () => {
@@ -330,11 +341,42 @@ class RelayGroupAdapter {
 }
 
 /**
+ * Simple relay adapter using NRelay1 from Nostrify
+ * This is more reliable than our custom WebSocket handling
+ */
+class SimpleNRelay1Adapter {
+  private relay: NRelay1;
+  private url: string;
+
+  constructor(url: string) {
+    this.url = url;
+    this.relay = new NRelay1(url);
+    console.log('[NIP-46] Created NRelay1 adapter for:', url);
+  }
+
+  req(filters: any[], options?: { signal?: AbortSignal }): AsyncIterable<[string, string, any]> {
+    console.log('[NIP-46] NRelay1 subscribing with filters:', JSON.stringify(filters));
+    return this.relay.req(filters, options);
+  }
+
+  async event(event: NostrEvent, options?: { signal?: AbortSignal }): Promise<void> {
+    console.log('[NIP-46] NRelay1 publishing event kind:', event.kind);
+    await this.relay.event(event, options);
+    console.log('[NIP-46] NRelay1 event published successfully');
+  }
+
+  close(): void {
+    console.log('[NIP-46] Closing NRelay1:', this.url);
+    this.relay.close();
+  }
+}
+
+/**
  * NIP-46 remote signer wrapper
  */
 class NIP46SignerWrapper implements NostrSigner {
   private signer: NConnectSigner;
-  private relayGroup: RelayGroupAdapter;
+  private relay: SimpleNRelay1Adapter;
   private userPubkey: string;
   private secret?: string;
   private connected: boolean = false;
@@ -349,11 +391,16 @@ class NIP46SignerWrapper implements NostrSigner {
   ) {
     this.userPubkey = userPubkey;
     this.secret = secret;
-    this.relayGroup = new RelayGroupAdapter(relays);
+    
+    // Use the first relay (should be wss://relay.nsec.app for bunker communication)
+    const primaryRelay = relays[0] || 'wss://relay.nsec.app';
+    console.log('[NIP-46] Using primary relay:', primaryRelay);
+    this.relay = new SimpleNRelay1Adapter(primaryRelay);
+    
     const clientSigner = new NSecSigner(clientSecretKey);
 
     this.signer = new NConnectSigner({
-      relay: this.relayGroup as any,
+      relay: this.relay as any,
       pubkey: bunkerPubkey,
       signer: clientSigner,
       timeout: 120_000, // 2 minutes to allow time for user approval
@@ -394,12 +441,28 @@ class NIP46SignerWrapper implements NostrSigner {
     return this.signer.signEvent(event);
   }
 
+  /**
+   * Test bunker connectivity with a ping
+   */
+  async ping(): Promise<string> {
+    await this.ensureConnected();
+    console.log('[NIP-46] Sending ping to bunker...');
+    try {
+      const result = await this.signer.ping();
+      console.log('[NIP-46] Ping response:', result);
+      return result;
+    } catch (e) {
+      console.error('[NIP-46] Ping failed:', e);
+      throw e;
+    }
+  }
+
   getType(): SignerType {
     return 'nip46';
   }
 
   close(): void {
-    this.relayGroup.close();
+    this.relay.close();
   }
 
   get nip44() {
