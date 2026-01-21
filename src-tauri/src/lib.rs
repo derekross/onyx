@@ -343,6 +343,40 @@ fn show_in_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FileStats {
+    pub size: u64,
+    pub created: u64,
+    pub modified: u64,
+}
+
+#[tauri::command]
+fn get_file_stats(path: String) -> Result<FileStats, String> {
+    let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
+
+    let size = metadata.len();
+
+    let created = metadata
+        .created()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    Ok(FileStats {
+        size,
+        created,
+        modified,
+    })
+}
+
 #[tauri::command]
 fn search_files(path: String, query: String) -> Result<Vec<SearchResult>, String> {
     let mut results: Vec<SearchResult> = Vec::new();
@@ -993,6 +1027,7 @@ pub fn run() {
             open_in_default_app,
             show_in_folder,
             search_files,
+            get_file_stats,
             run_terminal_command,
             pty::spawn_pty,
             pty::write_pty,

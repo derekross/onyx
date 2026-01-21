@@ -27,6 +27,8 @@ interface SidebarProps {
   exposeRefresh?: (fn: () => void) => void;
   exposeSearchQuery?: (fn: (query: string) => void) => void;
   onShareFile?: (path: string, content: string) => void;
+  onFileInfo?: (path: string) => void;
+  onPostToNostr?: (path: string, content: string, title: string) => void;
 }
 
 interface SearchResult {
@@ -907,23 +909,62 @@ const Sidebar: Component<SidebarProps> = (props) => {
             {props.bookmarks.includes(contextMenu()!.path) ? 'Remove bookmark' : 'Bookmark'}
           </div>
 
-          {/* Share option for files only */}
-          <Show when={!contextMenu()!.isDir && props.onShareFile}>
+          {/* File info option for files only */}
+          <Show when={!contextMenu()!.isDir && props.onFileInfo}>
             <div
               class="context-menu-item"
-              onClick={async () => {
+              onClick={() => {
                 const path = contextMenu()!.path;
                 closeContextMenu();
-                try {
-                  const content = await invoke<string>('read_file', { path });
-                  props.onShareFile?.(path, content);
-                } catch (err) {
-                  console.error('Failed to read file for sharing:', err);
-                }
+                props.onFileInfo?.(path);
               }}
             >
-              Share via Nostr...
+              File info...
             </div>
+          </Show>
+
+          {/* Nostr options - grouped together */}
+          <Show when={!contextMenu()!.isDir && (props.onShareFile || (contextMenu()!.path.endsWith('.md') && props.onPostToNostr))}>
+            <div class="context-menu-divider" />
+            <div class="context-menu-label">Nostr</div>
+            
+            <Show when={props.onShareFile}>
+              <div
+                class="context-menu-item"
+                onClick={async () => {
+                  const path = contextMenu()!.path;
+                  closeContextMenu();
+                  try {
+                    const content = await invoke<string>('read_file', { path });
+                    props.onShareFile?.(path, content);
+                  } catch (err) {
+                    console.error('Failed to read file for sharing:', err);
+                  }
+                }}
+              >
+                Share with user...
+              </div>
+            </Show>
+
+            <Show when={contextMenu()!.path.endsWith('.md') && props.onPostToNostr}>
+              <div
+                class="context-menu-item"
+                onClick={async () => {
+                  const path = contextMenu()!.path;
+                  closeContextMenu();
+                  try {
+                    const content = await invoke<string>('read_file', { path });
+                    const fileName = path.split('/').pop() || '';
+                    const title = fileName.replace(/\.md$/, '');
+                    props.onPostToNostr?.(path, content, title);
+                  } catch (err) {
+                    console.error('Failed to read file for posting:', err);
+                  }
+                }}
+              >
+                Publish as article...
+              </div>
+            </Show>
           </Show>
 
           <div class="context-menu-divider" />

@@ -5,7 +5,7 @@
  * Supports both local signing (nsec) and remote signing (NIP-46 bunker).
  */
 
-import { SimplePool, finalizeEvent, nip44, type Event } from 'nostr-tools';
+import { SimplePool, finalizeEvent, nip44, nip19, type Event } from 'nostr-tools';
 import { v4 as uuidv4 } from 'uuid';
 import { hexToBytes } from '@noble/hashes/utils.js';
 import {
@@ -839,6 +839,107 @@ export class SyncEngine {
   private extractTitleFromPath(path: string): string {
     const filename = this.extractFilenameFromPath(path);
     return filename.replace(/\.[^/.]+$/, '') || 'Untitled';
+  }
+
+  // ============================================
+  // NIP-23 Long-form Content Publishing
+  // ============================================
+
+  /**
+   * Publish a long-form article (NIP-23)
+   * 
+   * @param content - The markdown content of the article
+   * @param title - Article title
+   * @param summary - Brief summary/description
+   * @param image - Optional hero image URL
+   * @param tags - Array of topic tags (t tags)
+   * @param isDraft - If true, publish as kind 30024 (draft), otherwise kind 30023 (published)
+   * @returns Object with eventId and naddr
+   */
+  async publishArticle(
+    content: string,
+    title: string,
+    summary: string,
+    image: string,
+    tags: string[],
+    isDraft: boolean
+  ): Promise<{ eventId: string; naddr: string }> {
+    this.ensureIdentity();
+
+    const now = Math.floor(Date.now() / 1000);
+    // Use title slug as the d-tag identifier for the article
+    const d = this.slugify(title) + '-' + now.toString(36);
+    
+    // NIP-23: kind 30023 for published articles, kind 30024 for drafts
+    const kind = isDraft ? 30024 : 30023;
+
+    // Build tags array
+    const eventTags: string[][] = [
+      ['d', d],
+      ['title', title],
+      ['summary', summary],
+      ['published_at', String(now)],
+    ];
+
+    // Add hero image if provided
+    if (image) {
+      eventTags.push(['image', image]);
+    }
+
+    // Add topic tags
+    for (const tag of tags) {
+      eventTags.push(['t', tag.toLowerCase()]);
+    }
+
+    const event = await this.signEvent({
+      kind,
+      created_at: now,
+      tags: eventTags,
+      content, // NIP-23: content is plaintext markdown (not encrypted)
+    });
+
+    await this.publishEvent(event);
+
+    // Generate naddr for the article with relay hints
+    const naddr = this.encodeNaddr(kind, this.pubkey!, d, this.config.relays);
+
+    return {
+      eventId: event.id,
+      naddr,
+    };
+  }
+
+  /**
+   * Convert a string to a URL-friendly slug
+   */
+  private slugify(text: string): string {
+    return text
+      .toLowerCase()
+      .trim()
+      .replace(/[^\w\s-]/g, '') // Remove non-word chars except spaces and hyphens
+      .replace(/\s+/g, '-') // Replace spaces with hyphens
+      .replace(/-+/g, '-') // Replace multiple hyphens with single
+      .substring(0, 50); // Limit length
+  }
+
+  /**
+   * Encode a NIP-19 naddr for addressable events
+   */
+  public encodeNaddr(kind: number, pubkey: string, d: string, relays?: string[]): string {
+    return nip19.naddrEncode({
+      kind,
+      pubkey,
+      identifier: d,
+      relays: relays?.slice(0, 3) || [], // Include up to 3 relay hints
+    });
+  }
+
+  /**
+   * Generate naddr for a synced file
+   */
+  public getFileNaddr(d: string): string | null {
+    if (!this.pubkey) return null;
+    return this.encodeNaddr(KIND_FILE, this.pubkey, d, this.config.relays);
   }
 }
 

@@ -1,43 +1,33 @@
-import { Component, createSignal, createEffect, For, Show, onMount, onCleanup } from 'solid-js';
+import { Component, createSignal, For, Show, onMount, onCleanup } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { open } from '@tauri-apps/plugin-shell';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
-import QRCode from 'qrcode';
 import {
   getSyncEngine,
   setOnSaveSyncCallback,
   type NostrIdentity,
-  type SyncConfig,
   DEFAULT_SYNC_CONFIG,
   // Login functions
   generateNewLogin,
   importNsecLogin,
-  generateNostrConnectParams,
-  buildNostrConnectUri,
-  waitForNostrConnect,
   fetchUserRelays,
   fetchUserBlossomServers,
   fetchUserProfile,
   saveLogin,
-  getLogins,
   getCurrentLogin,
-  getCurrentLoginMeta,
   removeLogin,
   clearLogins,
   getIdentityFromLogin,
   saveUserProfile,
   getSavedProfile,
   type StoredLogin,
-  type StoredLoginMeta,
-  type NostrConnectParams,
-  type RelayEntry,
   type UserProfile,
 } from '../lib/nostr';
 import { createSignerFromLogin, type NostrSigner } from '../lib/nostr/signer';
 
 type SettingsSection = 'general' | 'editor' | 'files' | 'appearance' | 'hotkeys' | 'opencode' | 'productivity' | 'sync' | 'nostr' | 'about';
-type LoginTab = 'generate' | 'import' | 'connect';
+type LoginTab = 'generate' | 'import';
 
 interface SettingsProps {
   onClose: () => void;
@@ -99,18 +89,11 @@ const Settings: Component<SettingsProps> = (props) => {
   const [identity, setIdentity] = createSignal<NostrIdentity | null>(null);
   const [signer, setSigner] = createSignal<NostrSigner | null>(null);
   const [userProfile, setUserProfile] = createSignal<UserProfile | null>(null);
-  const [loginTab, setLoginTab] = createSignal<LoginTab>('connect');
+  const [loginTab, setLoginTab] = createSignal<LoginTab>('import');
   const [showPrivateKey, setShowPrivateKey] = createSignal(false);
   const [importKeyInput, setImportKeyInput] = createSignal('');
   const [keyError, setKeyError] = createSignal<string | null>(null);
   const [loginLoading, setLoginLoading] = createSignal(false);
-
-  // Nostr Connect state
-  const [connectParams, setConnectParams] = createSignal<NostrConnectParams | null>(null);
-  const [connectUri, setConnectUri] = createSignal<string>('');
-  const [connectStatus, setConnectStatus] = createSignal<'idle' | 'waiting' | 'success' | 'error'>('idle');
-  const [connectError, setConnectError] = createSignal<string | null>(null);
-  const [qrCodeSvg, setQrCodeSvg] = createSignal<string>('');
 
   // Relay state (now with read/write permissions)
   const [relays, setRelays] = createSignal<RelayInfo[]>(
@@ -635,54 +618,9 @@ const Settings: Component<SettingsProps> = (props) => {
     }
   };
 
-  // Initialize Nostr Connect
-  const initNostrConnect = () => {
-    // Use a dedicated bunker relay for NIP-46 communication
-    // This is the same relay Inkwell and other apps use for reliable bunker connections
-    const bunkerRelay = 'wss://relay.nsec.app';
-    const relayUrls = [bunkerRelay, ...relays().map(r => r.url)];
-    // Remove duplicates
-    const uniqueRelays = [...new Set(relayUrls)];
-    
-    const params = generateNostrConnectParams(uniqueRelays);
-    const uri = buildNostrConnectUri(params, 'Onyx');
-
-    setConnectParams(params);
-    setConnectUri(uri);
-    setConnectStatus('idle');
-    setConnectError(null);
-  };
-
-  // Start waiting for Nostr Connect
-  const startNostrConnect = async () => {
-    const params = connectParams();
-    if (!params) {
-      initNostrConnect();
-      return;
-    }
-
-    setConnectStatus('waiting');
-    setConnectError(null);
-
-    try {
-      const login = await waitForNostrConnect(params, 120000);
-      setConnectStatus('success');
-      await handleLoginSuccess(login, null);
-    } catch (e) {
-      setConnectStatus('error');
-      setConnectError(e instanceof Error ? e.message : 'Connection failed');
-    }
-  };
-
-  // Retry Nostr Connect with new parameters
-  const retryNostrConnect = () => {
-    initNostrConnect();
-    setConnectStatus('idle');
-  };
-
   // Logout
   const handleLogout = async () => {
-    // Close signer connections if NIP-46
+    // Close signer connections
     const currentSigner = signer();
     if (currentSigner?.close) {
       currentSigner.close();
@@ -700,49 +638,10 @@ const Settings: Component<SettingsProps> = (props) => {
     setIdentity(null);
     setSigner(null);
     setUserProfile(null);
-    setConnectParams(null);
-    setConnectUri('');
-    setConnectStatus('idle');
-    setQrCodeSvg('');
     
-    // Re-initialize Nostr Connect if on connect tab (or default to it)
-    setLoginTab('connect');
-    // Use setTimeout to ensure state updates have propagated
-    setTimeout(() => {
-      initNostrConnect();
-      setTimeout(() => startNostrConnect(), 100);
-    }, 50);
+    // Reset to import tab
+    setLoginTab('import');
   };
-
-  // Initialize connect params and start listening when switching to connect tab
-  // Also re-initialize after logout (when currentLogin becomes null)
-  createEffect(() => {
-    const isConnectTab = loginTab() === 'connect';
-    const hasNoParams = !connectParams();
-    const isLoggedOut = !currentLogin();
-    
-    if (isConnectTab && hasNoParams && isLoggedOut) {
-      initNostrConnect();
-      // Automatically start waiting for connection
-      setTimeout(() => startNostrConnect(), 100);
-    }
-  });
-
-  // Generate QR code SVG when URI changes
-  createEffect(() => {
-    const uri = connectUri();
-    if (uri) {
-      QRCode.toString(uri, {
-        type: 'svg',
-        margin: 1,
-        color: { dark: '#000000', light: '#ffffff' }
-      }).then(svg => {
-        setQrCodeSvg(svg);
-      }).catch(err => {
-        console.error('Failed to generate QR code:', err);
-      });
-    }
-  });
 
   // Copy to clipboard
   const copyToClipboard = async (text: string) => {
@@ -768,16 +667,16 @@ const Settings: Component<SettingsProps> = (props) => {
       return;
     }
 
-    const updated = [...relays(), { url, connected: false }];
+    const updated = [...relays(), { url, read: true, write: true }];
     setRelays(updated);
     setNewRelayUrl('');
 
     // Save to localStorage
-    localStorage.setItem('nostr_relays', JSON.stringify(updated.map(r => r.url)));
+    localStorage.setItem('nostr_relays', JSON.stringify(updated));
 
-    // Update sync engine config
+    // Update sync engine config (write relays only)
     const engine = getSyncEngine();
-    engine.setConfig({ relays: updated.map(r => r.url) });
+    engine.setConfig({ relays: updated.filter(r => r.write).map(r => r.url) });
   };
 
   // Remove relay
@@ -979,10 +878,10 @@ const Settings: Component<SettingsProps> = (props) => {
         }
 
         setSyncMessage(`Downloading ${path}...`);
-        const fullPath = `${props.vaultPath}/${path}`;
+        const fullPath: string = `${props.vaultPath}/${path}`;
 
         // Ensure parent directory exists
-        const parentDir = fullPath.substring(0, fullPath.lastIndexOf('/'));
+        const parentDir: string = fullPath.substring(0, fullPath.lastIndexOf('/'));
         if (parentDir !== props.vaultPath) {
           await invoke('create_folder', { path: parentDir }).catch(() => {});
         }
@@ -1852,7 +1751,7 @@ const Settings: Component<SettingsProps> = (props) => {
                           <div class="login-name">{userProfile()?.displayName || userProfile()?.name}</div>
                         </Show>
                         <div class="login-meta">
-                          <span class="login-type-badge">{currentLogin()!.type === 'bunker' ? 'Nostr Connect' : 'Local Key'}</span>
+                          <span class="login-type-badge">Local Key</span>
                           <Show when={userProfile()?.nip05}>
                             <span class="login-nip05">{userProfile()!.nip05}</span>
                           </Show>
@@ -1925,14 +1824,6 @@ const Settings: Component<SettingsProps> = (props) => {
                 {/* Not logged in - show login options */}
                 <Show when={!currentLogin()}>
                   <div class="login-tabs">
-                    <button class={`login-tab ${loginTab() === 'connect' ? 'active' : ''}`} onClick={() => setLoginTab('connect')}>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                        <line x1="3" y1="9" x2="21" y2="9"></line>
-                        <line x1="9" y1="21" x2="9" y2="9"></line>
-                      </svg>
-                      Nostr Connect
-                    </button>
                     <button class={`login-tab ${loginTab() === 'import' ? 'active' : ''}`} onClick={() => setLoginTab('import')}>
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -1951,66 +1842,6 @@ const Settings: Component<SettingsProps> = (props) => {
                   </div>
 
                   <div class="login-tab-content">
-                    {/* Nostr Connect Tab */}
-                    <Show when={loginTab() === 'connect'}>
-                      <div class="connect-content">
-                        <p class="connect-description">
-                          Scan this QR code with a Nostr signer app like <strong>Amber</strong> or <strong>Primal</strong> to login securely without exposing your private key.
-                        </p>
-
-                        <Show when={connectUri()}>
-                          <div class="qr-container">
-                            <Show when={connectStatus() !== 'success'}>
-                              <Show when={qrCodeSvg()} fallback={
-                                <div class="qr-code-loading" style="width: 200px; height: 200px; display: flex; align-items: center; justify-content: center;">
-                                  <span style="color: var(--text-secondary);">Generating QR code...</span>
-                                </div>
-                              }>
-                                <div class="qr-code" style="width: 200px; height: 200px;" innerHTML={qrCodeSvg()} />
-                              </Show>
-                              <Show when={connectStatus() === 'waiting'}>
-                                <p class="connect-hint">Scan with your signer app</p>
-                              </Show>
-                            </Show>
-                            <Show when={connectStatus() === 'success'}>
-                              <div class="connect-success">
-                                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                  <polyline points="20 6 9 17 4 12"></polyline>
-                                </svg>
-                                <p>Connected!</p>
-                              </div>
-                            </Show>
-                          </div>
-                        </Show>
-
-                        <Show when={connectError()}>
-                          <div class="setting-error">{connectError()}</div>
-                        </Show>
-
-                        <div class="connect-actions">
-                          <Show when={connectStatus() === 'waiting'}>
-                            <button class="setting-button secondary" onClick={() => setConnectStatus('idle')}>Cancel</button>
-                          </Show>
-                          <Show when={connectStatus() === 'error'}>
-                            <button class="setting-button" onClick={retryNostrConnect}>Try Again</button>
-                          </Show>
-                        </div>
-
-                        <div class="connect-uri-section">
-                          <p class="connect-uri-label">Or copy the connection URI:</p>
-                          <div class="connect-uri-display">
-                            <code class="connect-uri-value">{connectUri().slice(0, 50)}...</code>
-                            <button class="key-action-btn" onClick={() => copyToClipboard(connectUri())} title="Copy URI">
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                              </svg>
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </Show>
-
                     {/* Import Key Tab */}
                     <Show when={loginTab() === 'import'}>
                       <div class="import-content">

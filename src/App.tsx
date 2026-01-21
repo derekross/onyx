@@ -13,6 +13,8 @@ import ShareDialog from './components/ShareDialog';
 import NotificationsPanel from './components/NotificationsPanel';
 import SharedDocPreview from './components/SharedDocPreview';
 import SentSharesPanel from './components/SentSharesPanel';
+import FileInfoDialog from './components/FileInfoDialog';
+import PostToNostrDialog from './components/PostToNostrDialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getSyncEngine, getCurrentLogin } from './lib/nostr';
@@ -111,6 +113,10 @@ const App: Component = () => {
   const [previewingDoc, setPreviewingDoc] = createSignal<SharedDocument | null>(null);
   const [isImporting, setIsImporting] = createSignal(false);
   const [currentVault, setCurrentVault] = createSignal<Vault | null>(null);
+
+  // File Info and Post to Nostr dialogs
+  const [showFileInfo, setShowFileInfo] = createSignal<string | null>(null);
+  const [postToNostrTarget, setPostToNostrTarget] = createSignal<{ path: string; content: string; title: string } | null>(null);
 
   // Unread count for notifications badge
   const unreadShareCount = () => sharedWithMe().filter(d => !d.isRead).length;
@@ -277,7 +283,7 @@ const App: Component = () => {
       
       // Only create signer if engine doesn't have one yet
       if (!engine.getSigner()) {
-        const signer = getSignerFromStoredLogin();
+        const signer = await getSignerFromStoredLogin();
         if (signer) {
           await engine.setSigner(signer);
         }
@@ -375,6 +381,16 @@ const App: Component = () => {
     
     setShareTarget({ path, content, title });
     setShowShareDialog(true);
+  };
+
+  // Handle showing file info
+  const handleFileInfo = (path: string) => {
+    setShowFileInfo(path);
+  };
+
+  // Handle posting to Nostr
+  const handlePostToNostr = (path: string, content: string, title: string) => {
+    setPostToNostrTarget({ path, content, title });
   };
 
   // Start/stop file watcher when vault path changes
@@ -776,7 +792,7 @@ const App: Component = () => {
 
       // Only create signer if engine doesn't have one yet
       if (!engine.getSigner()) {
-        const signer = getSignerFromStoredLogin();
+        const signer = await getSignerFromStoredLogin();
         if (!signer) {
           setSyncStatus('idle');
           return;
@@ -1084,6 +1100,8 @@ const App: Component = () => {
             exposeRefresh={(fn) => { refreshSidebar = fn; }}
             exposeSearchQuery={(fn) => { setSearchQuery = fn; }}
             onShareFile={handleShareFile}
+            onFileInfo={handleFileInfo}
+            onPostToNostr={handlePostToNostr}
           />
         </div>
         <div
@@ -1402,6 +1420,126 @@ const App: Component = () => {
           onRevoke={handleRevokeShare}
           onRefresh={fetchSharedDocuments}
           onClose={() => setShowSentShares(false)}
+        />
+      </Show>
+
+      {/* File Info Dialog */}
+      <Show when={showFileInfo()}>
+        <FileInfoDialog
+          filePath={showFileInfo()!}
+          vaultPath={vaultPath() || ''}
+          onClose={() => setShowFileInfo(null)}
+          syncEnabled={syncStatus() !== 'off'}
+          getRemoteInfo={async () => {
+            const engine = getSyncEngine();
+            const signer = engine.getSigner();
+            if (!signer || !vaultPath()) return null;
+            
+            try {
+              // Fetch vaults to find the file
+              const vaults = await engine.fetchVaults();
+              const vault = vaults[0];
+              if (!vault) return null;
+              
+              // Get the relative path
+              const filePath = showFileInfo()!;
+              const relativePath = filePath.replace(vaultPath()! + '/', '');
+              
+              // Look for the file in the vault's file index
+              const fileEntry = vault.data.files?.find(f => f.path === relativePath);
+              if (!fileEntry) return null;
+              
+              // Fetch the actual file event to get full details
+              const files = await engine.fetchVaultFiles(vault);
+              const syncedFile = files.find(f => f.data.path === relativePath);
+              if (!syncedFile) return null;
+              
+              // Generate naddr
+              const naddr = engine.getFileNaddr(syncedFile.d) || '';
+              
+              return {
+                eventId: syncedFile.eventId,
+                d: syncedFile.d,
+                checksum: syncedFile.data.checksum,
+                version: syncedFile.data.version,
+                modified: syncedFile.data.modified,
+                naddr,
+                relays: engine.getConfig().relays,
+              };
+            } catch (err) {
+              console.error('Failed to get remote file info:', err);
+              return null;
+            }
+          }}
+          onSyncFile={async () => {
+            const engine = getSyncEngine();
+            const signer = engine.getSigner();
+            if (!signer) {
+              throw new Error('Not logged in. Please log in to sync files.');
+            }
+            if (!vaultPath()) {
+              throw new Error('No vault selected.');
+            }
+            
+            // Get or create vault
+            const vaults = await engine.fetchVaults();
+            let vault = vaults[0];
+            if (!vault) {
+              vault = await engine.createVault('My Notes', 'Default vault');
+            }
+            
+            // Read the file content
+            const filePath = showFileInfo()!;
+            const content = await invoke<string>('read_file', { path: filePath });
+            const relativePath = filePath.replace(vaultPath()! + '/', '');
+            
+            // Publish the file
+            const result = await engine.publishFile(vault, relativePath, content);
+            
+            // Generate naddr for the synced file
+            const naddr = engine.getFileNaddr(result.file.d) || '';
+            
+            // Return remote info
+            return {
+              eventId: result.file.eventId,
+              d: result.file.d,
+              checksum: result.file.data.checksum,
+              version: result.file.data.version,
+              modified: result.file.data.modified,
+              naddr,
+              relays: engine.getConfig().relays,
+            };
+          }}
+        />
+      </Show>
+
+      {/* Post to Nostr Dialog */}
+      <Show when={postToNostrTarget()}>
+        <PostToNostrDialog
+          filePath={postToNostrTarget()!.path}
+          content={postToNostrTarget()!.content}
+          title={postToNostrTarget()!.title}
+          onClose={() => setPostToNostrTarget(null)}
+          onPublish={async (options) => {
+            // TODO: Implement NIP-23 article publishing
+            const engine = getSyncEngine();
+            const signer = engine.getSigner();
+            if (!signer) {
+              throw new Error('Not logged in');
+            }
+            
+            // Publish as NIP-23 long-form article
+            const result = await engine.publishArticle(
+              postToNostrTarget()!.content,
+              options.title,
+              options.summary,
+              options.image,
+              options.tags,
+              options.isDraft
+            );
+            
+            return result;
+          }}
         />
       </Show>
     </div>
