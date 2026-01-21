@@ -697,11 +697,17 @@ const Settings: Component<SettingsProps> = (props) => {
     setConnectParams(null);
     setConnectUri('');
     setConnectStatus('idle');
+    setQrCodeSvg('');
   };
 
   // Initialize connect params and start listening when switching to connect tab
+  // Also re-initialize after logout (when currentLogin becomes null)
   createEffect(() => {
-    if (loginTab() === 'connect' && !connectParams()) {
+    const isConnectTab = loginTab() === 'connect';
+    const hasNoParams = !connectParams();
+    const isLoggedOut = !currentLogin();
+    
+    if (isConnectTab && hasNoParams && isLoggedOut) {
       initNostrConnect();
       // Automatically start waiting for connection
       setTimeout(() => startNostrConnect(), 100);
@@ -1941,7 +1947,13 @@ const Settings: Component<SettingsProps> = (props) => {
                         <Show when={connectUri()}>
                           <div class="qr-container">
                             <Show when={connectStatus() !== 'success'}>
-                              <div class="qr-code" style="width: 200px; height: 200px;" innerHTML={qrCodeSvg()} />
+                              <Show when={qrCodeSvg()} fallback={
+                                <div class="qr-code-loading" style="width: 200px; height: 200px; display: flex; align-items: center; justify-content: center;">
+                                  <span style="color: var(--text-secondary);">Generating QR code...</span>
+                                </div>
+                              }>
+                                <div class="qr-code" style="width: 200px; height: 200px;" innerHTML={qrCodeSvg()} />
+                              </Show>
                               <Show when={connectStatus() === 'waiting'}>
                                 <p class="connect-hint" style="margin-top: 12px; color: var(--text-secondary);">Scan with your signer app</p>
                               </Show>
