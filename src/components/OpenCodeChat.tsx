@@ -13,6 +13,7 @@ import {
   sendPromptAsync,
   subscribeToEvents,
   abortSession,
+  getCurrentModel,
   type ChatMessage,
   type MessagePart,
   type SessionInfo,
@@ -95,7 +96,27 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
     localStorage.getItem('opencode_include_context') !== 'false' // Default to true
   );
   const [userProfile, setUserProfile] = createSignal<UserProfile | null>(null);
+  const [currentModel, setCurrentModel] = createSignal<string | null>(null);
   
+  // Format model name for display (e.g., "anthropic/claude-3-5-sonnet" -> "Claude 3.5 Sonnet")
+  const displayModelName = () => {
+    const model = currentModel();
+    if (!model) return 'Using default model';
+    
+    // Extract model ID (after the provider/)
+    const parts = model.split('/');
+    const modelId = parts.length > 1 ? parts.slice(1).join('/') : model;
+    
+    // Clean up common model name patterns
+    return modelId
+      .replace(/-/g, ' ')
+      .replace(/\./g, '.')
+      .replace(/\b\w/g, c => c.toUpperCase()) // Capitalize words
+      .replace(/(\d+) (\d+)/g, '$1.$2') // "3 5" -> "3.5"
+      .replace(/Latest/gi, '')
+      .trim();
+  };
+
   let messagesEndRef: HTMLDivElement | undefined;
   let inputRef: HTMLTextAreaElement | undefined;
   let eventCleanup: (() => void) | null = null;
@@ -185,6 +206,10 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
       // Load any existing messages
       const existingMessages = await getSessionMessages(newSession.id);
       setMessages(existingMessages);
+      
+      // Load current model from localStorage
+      const model = getCurrentModel();
+      setCurrentModel(model);
       
       // Subscribe to events
       eventCleanup = await subscribeToEvents(handleServerEvent, handleEventError);
@@ -293,6 +318,12 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
         break;
       }
       
+      // Config updated - refresh model from localStorage
+      case 'config.updated': {
+        setCurrentModel(getCurrentModel());
+        break;
+      }
+      
       // Ignore these events
       case 'server.connected':
       case 'server.heartbeat':
@@ -391,7 +422,10 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
       // Track the full prompt to filter echoes (including context)
       setLastSentMessage(prompt);
       
-      await sendPromptAsync(sessionId, prompt);
+      // Get selected model from localStorage
+      const selectedModel = getCurrentModel();
+      
+      await sendPromptAsync(sessionId, prompt, selectedModel || undefined);
     } catch (err) {
       console.error('[OpenCodeChat] Failed to send message:', err);
       setError('Failed to send message');
@@ -704,6 +738,15 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
                 <span>Clear</span>
               </button>
             </Show>
+            {/* Model indicator - pushed to the right */}
+            <div class="chat-model-indicator" title={currentModel() ? `Model: ${currentModel()}` : 'Using OpenCode default model'}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                <path d="M2 17l10 5 10-5"></path>
+                <path d="M2 12l10 5 10-5"></path>
+              </svg>
+              <span>{displayModelName()}</span>
+            </div>
           </div>
           <div class="chat-input-wrapper">
             <textarea

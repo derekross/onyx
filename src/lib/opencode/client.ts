@@ -32,15 +32,27 @@ export function getClient(): OpencodeClient | null {
 }
 
 /**
+ * Promise with timeout wrapper
+ */
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error('Request timed out')), timeoutMs)
+    ),
+  ]);
+}
+
+/**
  * Check if the OpenCode server is running
  */
-export async function isServerRunning(): Promise<boolean> {
+export async function isServerRunning(timeoutMs: number = 3000): Promise<boolean> {
   if (!client) {
     initClient();
   }
   
   try {
-    const response = await client!.config.get();
+    const response = await withTimeout(client!.config.get(), timeoutMs);
     return response.response.ok;
   } catch {
     return false;
@@ -244,16 +256,21 @@ export async function sendPrompt(
  */
 export async function sendPromptAsync(
   sessionId: string,
-  text: string
+  text: string,
+  model?: string
 ): Promise<void> {
   if (!client) {
     initClient();
   }
   
+  // Parse model string if provided
+  const modelConfig = model ? parseModelString(model) : undefined;
+  
   await client!.session.promptAsync({
     path: { id: sessionId },
     body: {
       parts: [{ type: 'text', text }],
+      ...(modelConfig && { model: modelConfig }),
     },
   });
 }
@@ -325,4 +342,93 @@ export async function deleteSession(sessionId: string): Promise<void> {
 export async function getSessionStatus(_sessionId: string): Promise<string> {
   // TODO: Fix SDK typing issue - for now we'll track status via events
   return 'idle';
+}
+
+/**
+ * Provider info
+ */
+export interface ProviderInfo {
+  id: string;
+  name: string;
+  models: ModelInfo[];
+}
+
+/**
+ * Model info
+ */
+export interface ModelInfo {
+  id: string;
+  name: string;
+  providerId: string;
+}
+
+/**
+ * Get the current model setting (from localStorage)
+ */
+export function getCurrentModel(): string | null {
+  return localStorage.getItem('opencode_model');
+}
+
+/**
+ * Set the current model (saves to localStorage)
+ */
+export function setCurrentModel(model: string): void {
+  localStorage.setItem('opencode_model', model);
+}
+
+/**
+ * Parse a model string like "provider/model" into parts
+ */
+export function parseModelString(model: string): { providerID: string; modelID: string } | null {
+  const parts = model.split('/');
+  if (parts.length < 2) return null;
+  return {
+    providerID: parts[0],
+    modelID: parts.slice(1).join('/'), // Handle model IDs with slashes
+  };
+}
+
+/**
+ * Get list of available providers and their models
+ */
+export async function getProviders(timeoutMs: number = 5000): Promise<ProviderInfo[]> {
+  if (!client) {
+    initClient();
+  }
+  
+  try {
+    const response = await withTimeout(client!.provider.list(), timeoutMs);
+    const data = response.data as { 
+      all?: Array<{
+        id: string;
+        name: string;
+        models?: Record<string, { id: string; name: string }>;
+      }>;
+      connected?: string[];
+    } | undefined;
+    
+    if (!data?.all) {
+      return [];
+    }
+    
+    // Get connected providers (ones that have API keys set up)
+    const connected = new Set(data.connected || []);
+    
+    // Map to our format, only include connected providers with models
+    return data.all
+      .filter(p => connected.has(p.id) && p.models && Object.keys(p.models).length > 0)
+      .map(p => ({
+        id: p.id,
+        name: p.name || p.id,
+        models: Object.values(p.models || {}).map(m => ({
+          id: m.id,
+          name: m.name || m.id,
+          providerId: p.id,
+        })),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch (err) {
+    console.error('Failed to get providers:', err);
+    return [];
+  }
 }

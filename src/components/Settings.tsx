@@ -1,4 +1,4 @@
-import { Component, createSignal, For, Show, onMount, onCleanup } from 'solid-js';
+import { Component, createSignal, For, Show, onMount, onCleanup, createEffect } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { open } from '@tauri-apps/plugin-shell';
@@ -25,6 +25,14 @@ import {
   type UserProfile,
 } from '../lib/nostr';
 import { createSignerFromLogin, type NostrSigner } from '../lib/nostr/signer';
+import {
+  initClient,
+  isServerRunning,
+  getProviders,
+  getCurrentModel,
+  setCurrentModel,
+  type ProviderInfo,
+} from '../lib/opencode/client';
 
 type SettingsSection = 'general' | 'editor' | 'files' | 'appearance' | 'hotkeys' | 'opencode' | 'productivity' | 'sync' | 'nostr' | 'about';
 type LoginTab = 'generate' | 'import';
@@ -34,6 +42,7 @@ interface SettingsProps {
   vaultPath: string | null;
   onSyncComplete?: () => void;
   onSyncEnabledChange?: (enabled: boolean) => void;
+  initialSection?: SettingsSection;
 }
 
 interface SettingsSectionItem {
@@ -83,7 +92,7 @@ const sections: SettingsSectionItem[] = [
 ];
 
 const Settings: Component<SettingsProps> = (props) => {
-  const [activeSection, setActiveSection] = createSignal<SettingsSection>('general');
+  const [activeSection, setActiveSection] = createSignal<SettingsSection>(props.initialSection || 'general');
 
   // Login state
   const [currentLogin, setCurrentLogin] = createSignal<StoredLogin | null>(null);
@@ -140,6 +149,15 @@ const Settings: Component<SettingsProps> = (props) => {
 
   // OpenCode settings
   const [openCodePath, setOpenCodePath] = createSignal<string>('');
+  const [openCodeProviders, setOpenCodeProviders] = createSignal<ProviderInfo[]>([]);
+  const [openCodeModel, setOpenCodeModel] = createSignal<string | null>(null);
+  const [openCodeLoading, setOpenCodeLoading] = createSignal(false);
+  const [openCodeServerRunning, setOpenCodeServerRunning] = createSignal(false);
+  const [openCodeError, setOpenCodeError] = createSignal<string | null>(null);
+  const [modelSearch, setModelSearch] = createSignal('');
+  const [modelDropdownOpen, setModelDropdownOpen] = createSignal(false);
+  let modelSearchRef: HTMLInputElement | undefined;
+  let modelDropdownRef: HTMLDivElement | undefined;
 
   // Files & Links settings
   const [useWikilinks, setUseWikilinks] = createSignal(
@@ -1028,6 +1046,105 @@ const Settings: Component<SettingsProps> = (props) => {
     localStorage.removeItem('opencode_path');
   };
 
+  // Load OpenCode providers and current model
+  const loadOpenCodeConfig = async () => {
+    setOpenCodeLoading(true);
+    setOpenCodeError(null);
+    try {
+      initClient();
+      const running = await isServerRunning();
+      setOpenCodeServerRunning(running);
+      
+      if (running) {
+        const [providers, currentModel] = await Promise.all([
+          getProviders(),
+          getCurrentModel(),
+        ]);
+        setOpenCodeProviders(providers);
+        setOpenCodeModel(currentModel);
+      }
+    } catch (err) {
+      console.error('Failed to load OpenCode config:', err);
+      setOpenCodeError(err instanceof Error ? err.message : 'Failed to load configuration');
+    } finally {
+      setOpenCodeLoading(false);
+    }
+  };
+
+  // Handle model change
+  const handleModelChange = async (model: string) => {
+    try {
+      await setCurrentModel(model);
+      setOpenCodeModel(model);
+      setModelDropdownOpen(false);
+      setModelSearch('');
+    } catch (err) {
+      console.error('Failed to set model:', err);
+    }
+  };
+
+  // Filter models based on search
+  const filteredProviders = () => {
+    const search = modelSearch().toLowerCase().trim();
+    if (!search) return openCodeProviders();
+    
+    return openCodeProviders()
+      .map(provider => ({
+        ...provider,
+        models: provider.models.filter(model => 
+          model.name.toLowerCase().includes(search) ||
+          model.id.toLowerCase().includes(search) ||
+          provider.name.toLowerCase().includes(search)
+        )
+      }))
+      .filter(provider => provider.models.length > 0);
+  };
+
+  // Get display name for current model
+  const currentModelDisplayName = () => {
+    const model = openCodeModel();
+    if (!model) return null;
+    
+    for (const provider of openCodeProviders()) {
+      for (const m of provider.models) {
+        if (`${provider.id}/${m.id}` === model) {
+          return `${provider.name} / ${m.name}`;
+        }
+      }
+    }
+    return model; // Fallback to raw model string
+  };
+
+  // Handle click outside to close dropdown
+  const handleClickOutside = (e: MouseEvent) => {
+    if (modelDropdownRef && !modelDropdownRef.contains(e.target as Node)) {
+      setModelDropdownOpen(false);
+    }
+  };
+
+  // Load OpenCode config when switching to opencode section
+  createEffect(() => {
+    if (activeSection() === 'opencode') {
+      loadOpenCodeConfig();
+    }
+  });
+
+  // Add/remove click outside listener
+  createEffect(() => {
+    if (modelDropdownOpen()) {
+      document.addEventListener('mousedown', handleClickOutside);
+      // Focus the search input when dropdown opens
+      setTimeout(() => modelSearchRef?.focus(), 0);
+    } else {
+      document.removeEventListener('mousedown', handleClickOutside);
+    }
+  });
+
+  // Cleanup listener on unmount
+  onCleanup(() => {
+    document.removeEventListener('mousedown', handleClickOutside);
+  });
+
   // Wikilinks toggle handler
   const handleWikilinksToggle = (enabled: boolean) => {
     setUseWikilinks(enabled);
@@ -1491,9 +1608,153 @@ const Settings: Component<SettingsProps> = (props) => {
                     <line x1="12" y1="16" x2="12" y2="12"></line>
                     <line x1="12" y1="8" x2="12.01" y2="8"></line>
                   </svg>
-                  <p>OpenCode is an AI coding assistant. If it's not in your system PATH, you can specify its location here.</p>
+                  <p>OpenCode is an AI coding assistant. Configure your preferred AI provider and model below.</p>
                 </div>
 
+                {/* Model Selection */}
+                <div class="settings-section-title">AI Model</div>
+                
+                <Show when={openCodeLoading()}>
+                  <div class="setting-item">
+                    <div class="opencode-loading">
+                      <div class="spinner"></div>
+                      <span>Loading providers...</span>
+                    </div>
+                  </div>
+                </Show>
+
+                <Show when={!openCodeLoading() && openCodeError()}>
+                  <div class="settings-notice warning">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <line x1="12" y1="8" x2="12" y2="12"></line>
+                      <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                    </svg>
+                    <p>Error loading configuration: {openCodeError()}</p>
+                  </div>
+                </Show>
+
+                <Show when={!openCodeLoading() && !openCodeError() && !openCodeServerRunning()}>
+                  <div class="settings-notice warning">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <line x1="12" y1="8" x2="12" y2="12"></line>
+                      <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                    </svg>
+                    <p>OpenCode server is not running. Open the OpenCode panel to start it, then return here to configure the model.</p>
+                  </div>
+                </Show>
+
+                <Show when={!openCodeLoading() && openCodeServerRunning()}>
+                  <div class="setting-item">
+                    <div class="setting-info">
+                      <div class="setting-name">Provider / Model</div>
+                      <div class="setting-description">Select the AI provider and model to use for chat</div>
+                    </div>
+                  </div>
+
+                  <div class="setting-item column">
+                    <Show when={openCodeProviders().length > 0} fallback={
+                      <div class="settings-notice">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="8" x2="12" y2="12"></line>
+                          <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                        </svg>
+                        <p>No providers configured. Set up API keys for providers like Anthropic, OpenAI, or OpenRouter in your OpenCode config file.</p>
+                      </div>
+                    }>
+                      <div class="model-selector" ref={modelDropdownRef}>
+                        <button 
+                          class="model-selector-trigger"
+                          onClick={() => setModelDropdownOpen(!modelDropdownOpen())}
+                        >
+                          <span class="model-selector-value">
+                            {currentModelDisplayName() || 'Select a model...'}
+                          </span>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                          </svg>
+                        </button>
+                        
+                        <Show when={modelDropdownOpen()}>
+                          <div class="model-selector-dropdown">
+                            <div class="model-selector-search">
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                              </svg>
+                              <input
+                                ref={modelSearchRef}
+                                type="text"
+                                placeholder="Search models..."
+                                value={modelSearch()}
+                                onInput={(e) => setModelSearch(e.currentTarget.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Escape') {
+                                    setModelDropdownOpen(false);
+                                    setModelSearch('');
+                                  }
+                                }}
+                              />
+                              <Show when={modelSearch()}>
+                                <button 
+                                  class="model-search-clear"
+                                  onClick={() => setModelSearch('')}
+                                >
+                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                                  </svg>
+                                </button>
+                              </Show>
+                            </div>
+                            
+                            <div class="model-selector-options">
+                              <Show when={filteredProviders().length > 0} fallback={
+                                <div class="model-selector-empty">No models match "{modelSearch()}"</div>
+                              }>
+                                <For each={filteredProviders()}>
+                                  {(provider) => (
+                                    <div class="model-selector-group">
+                                      <div class="model-selector-group-label">{provider.name}</div>
+                                      <For each={provider.models}>
+                                        {(model) => (
+                                          <button
+                                            class={`model-selector-option ${openCodeModel() === `${provider.id}/${model.id}` ? 'selected' : ''}`}
+                                            onClick={() => handleModelChange(`${provider.id}/${model.id}`)}
+                                          >
+                                            <span class="model-name">{model.name}</span>
+                                            <Show when={openCodeModel() === `${provider.id}/${model.id}`}>
+                                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <polyline points="20 6 9 17 4 12"></polyline>
+                                              </svg>
+                                            </Show>
+                                          </button>
+                                        )}
+                                      </For>
+                                    </div>
+                                  )}
+                                </For>
+                              </Show>
+                            </div>
+                          </div>
+                        </Show>
+                      </div>
+                    </Show>
+                  </div>
+
+                  <Show when={openCodeModel()}>
+                    <div class="setting-item">
+                      <div class="setting-info">
+                        <div class="setting-name">Current model</div>
+                        <div class="setting-description opencode-current-model">{openCodeModel()}</div>
+                      </div>
+                    </div>
+                  </Show>
+                </Show>
+
+                <div class="settings-section-title">Binary Path</div>
                 <div class="setting-item">
                   <div class="setting-info">
                     <div class="setting-name">OpenCode binary path</div>

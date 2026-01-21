@@ -9,13 +9,30 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
 use std::sync::Arc;
 #[cfg(not(target_os = "android"))]
 use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use walkdir::WalkDir;
+
+// OpenCode server process management
+struct OpenCodeServerState {
+    process: Option<Child>,
+    port: Option<u16>,
+}
+
+impl Default for OpenCodeServerState {
+    fn default() -> Self {
+        Self {
+            process: None,
+            port: None,
+        }
+    }
+}
+
+type SharedOpenCodeServerState = Arc<Mutex<OpenCodeServerState>>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AppSettings {
@@ -505,11 +522,51 @@ fn run_terminal_command(command: String, cwd: Option<String>) -> Result<String, 
 }
 
 /// Start the OpenCode server in the background
-/// This spawns `opencode serve --port <port>` as a detached background process
+/// This spawns `opencode serve --port <port>` and tracks the process for cleanup
 /// Works on Windows, macOS, and Linux
 #[tauri::command]
-fn start_opencode_server(command: String, cwd: Option<String>, port: u16) -> Result<(), String> {
+fn start_opencode_server(
+    state: tauri::State<'_, SharedOpenCodeServerState>,
+    command: String,
+    cwd: Option<String>,
+    port: u16,
+) -> Result<(), String> {
     use std::process::Stdio;
+
+    // Check if we already have a running server
+    {
+        let mut server_state = state.lock();
+        let current_port = server_state.port;
+
+        if let Some(ref mut child) = server_state.process {
+            // Check if the process is still running
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    // Process has exited, clear it
+                    server_state.process = None;
+                    server_state.port = None;
+                }
+                Ok(None) => {
+                    // Process is still running
+                    if current_port == Some(port) {
+                        // Same port, server already running
+                        return Ok(());
+                    } else {
+                        // Different port, kill the old one first
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        server_state.process = None;
+                        server_state.port = None;
+                    }
+                }
+                Err(_) => {
+                    // Error checking, assume it's dead
+                    server_state.process = None;
+                    server_state.port = None;
+                }
+            }
+        }
+    }
 
     // Build enhanced PATH with common user binary locations (for Unix-like systems)
     #[cfg(not(target_os = "windows"))]
@@ -529,10 +586,7 @@ fn start_opencode_server(command: String, cwd: Option<String>, port: u16) -> Res
     };
 
     #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-
-        // On Windows, spawn the command directly with CREATE_NO_WINDOW and DETACHED_PROCESS flags
+    let child = {
         let mut cmd = Command::new(&command);
         cmd.args(["serve", "--port", &port.to_string()]);
         if let Some(dir) = cwd {
@@ -541,17 +595,12 @@ fn start_opencode_server(command: String, cwd: Option<String>, port: u16) -> Res
         cmd.stdin(Stdio::null());
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::null());
-        // CREATE_NO_WINDOW (0x08000000) | DETACHED_PROCESS (0x00000008)
-        cmd.creation_flags(0x08000008);
         cmd.spawn()
-            .map_err(|e| format!("Failed to spawn opencode: {}", e))?;
-    }
+            .map_err(|e| format!("Failed to spawn opencode: {}", e))?
+    };
 
     #[cfg(target_os = "macos")]
-    {
-        use std::os::unix::process::CommandExt;
-
-        // On macOS, spawn directly and use setsid to detach
+    let child = {
         let mut cmd = Command::new(&command);
         cmd.args(["serve", "--port", &port.to_string()]);
         if let Some(dir) = cwd {
@@ -561,23 +610,12 @@ fn start_opencode_server(command: String, cwd: Option<String>, port: u16) -> Res
         cmd.stdin(Stdio::null());
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::null());
-
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::setsid();
-                Ok(())
-            });
-        }
-
         cmd.spawn()
-            .map_err(|e| format!("Failed to spawn opencode: {}. PATH={}", e, enhanced_path))?;
-    }
+            .map_err(|e| format!("Failed to spawn opencode: {}. PATH={}", e, enhanced_path))?
+    };
 
     #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::process::CommandExt;
-
-        // On Linux, spawn directly and use setsid to detach
+    let child = {
         let mut cmd = Command::new(&command);
         cmd.args(["serve", "--port", &port.to_string()]);
         if let Some(dir) = cwd {
@@ -587,19 +625,56 @@ fn start_opencode_server(command: String, cwd: Option<String>, port: u16) -> Res
         cmd.stdin(Stdio::null());
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::null());
-
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::setsid();
-                Ok(())
-            });
-        }
-
         cmd.spawn()
-            .map_err(|e| format!("Failed to spawn opencode: {}. PATH={}", e, enhanced_path))?;
+            .map_err(|e| format!("Failed to spawn opencode: {}. PATH={}", e, enhanced_path))?
+    };
+
+    // Store the process for later cleanup
+    {
+        let mut server_state = state.lock();
+        server_state.process = Some(child);
+        server_state.port = Some(port);
     }
 
     Ok(())
+}
+
+/// Stop the OpenCode server if running
+#[tauri::command]
+fn stop_opencode_server(state: tauri::State<'_, SharedOpenCodeServerState>) -> Result<(), String> {
+    let mut server_state = state.lock();
+    if let Some(ref mut child) = server_state.process {
+        // Try graceful kill first, then force if needed
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    server_state.process = None;
+    server_state.port = None;
+    Ok(())
+}
+
+/// Check if the OpenCode server is running (managed by this app)
+#[tauri::command]
+fn is_opencode_server_managed(state: tauri::State<'_, SharedOpenCodeServerState>) -> bool {
+    let mut server_state = state.lock();
+    if let Some(ref mut child) = server_state.process {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                // Process has exited
+                server_state.process = None;
+                server_state.port = None;
+                false
+            }
+            Ok(None) => true, // Still running
+            Err(_) => {
+                server_state.process = None;
+                server_state.port = None;
+                false
+            }
+        }
+    } else {
+        false
+    }
 }
 
 // PTY Session management (desktop only)
@@ -1038,12 +1113,30 @@ mod keyring_commands {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Create shared state for OpenCode server
+    let opencode_server_state: SharedOpenCodeServerState =
+        Arc::new(Mutex::new(OpenCodeServerState::default()));
+    let opencode_server_state_clone = opencode_server_state.clone();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .manage(Arc::new(Mutex::new(PtyState::default())) as SharedPtyState)
         .manage(Arc::new(Mutex::new(WatcherState::default())) as SharedWatcherState)
+        .manage(opencode_server_state)
+        // Clean up OpenCode server on app exit
+        .on_window_event(move |_window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                let mut server_state = opencode_server_state_clone.lock();
+                if let Some(ref mut child) = server_state.process {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                server_state.process = None;
+                server_state.port = None;
+            }
+        })
         // Register asset protocol to serve local files
         .register_uri_scheme_protocol("asset", |_app, request| {
             let path = request.uri().path();
@@ -1128,6 +1221,8 @@ pub fn run() {
             get_file_stats,
             run_terminal_command,
             start_opencode_server,
+            stop_opencode_server,
+            is_opencode_server_managed,
             pty::spawn_pty,
             pty::write_pty,
             pty::resize_pty,
