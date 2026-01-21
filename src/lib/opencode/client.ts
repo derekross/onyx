@@ -388,10 +388,20 @@ export function parseModelString(model: string): { providerID: string; modelID: 
   };
 }
 
+// Cache for providers list
+let providersCache: ProviderInfo[] | null = null;
+let providersCacheTime: number = 0;
+const PROVIDERS_CACHE_TTL = 60000; // 1 minute cache
+
 /**
- * Get list of available providers and their models
+ * Get list of available providers and their models (with caching)
  */
-export async function getProviders(timeoutMs: number = 5000): Promise<ProviderInfo[]> {
+export async function getProviders(timeoutMs: number = 5000, forceRefresh: boolean = false): Promise<ProviderInfo[]> {
+  // Return cached data if still valid
+  if (!forceRefresh && providersCache && Date.now() - providersCacheTime < PROVIDERS_CACHE_TTL) {
+    return providersCache;
+  }
+  
   if (!client) {
     initClient();
   }
@@ -408,14 +418,14 @@ export async function getProviders(timeoutMs: number = 5000): Promise<ProviderIn
     } | undefined;
     
     if (!data?.all) {
-      return [];
+      return providersCache || [];
     }
     
     // Get connected providers (ones that have API keys set up)
     const connected = new Set(data.connected || []);
     
     // Map to our format, only include connected providers with models
-    return data.all
+    const providers = data.all
       .filter(p => connected.has(p.id) && p.models && Object.keys(p.models).length > 0)
       .map(p => ({
         id: p.id,
@@ -427,8 +437,23 @@ export async function getProviders(timeoutMs: number = 5000): Promise<ProviderIn
         })),
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
+    
+    // Update cache
+    providersCache = providers;
+    providersCacheTime = Date.now();
+    
+    return providers;
   } catch (err) {
     console.error('Failed to get providers:', err);
-    return [];
+    // Return stale cache if available
+    return providersCache || [];
   }
+}
+
+/**
+ * Clear the providers cache (call when settings change)
+ */
+export function clearProvidersCache(): void {
+  providersCache = null;
+  providersCacheTime = 0;
 }

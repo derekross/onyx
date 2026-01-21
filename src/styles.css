@@ -1885,6 +1885,33 @@ body {
   padding: 0 4px;
 }
 
+/* Load More Button */
+.chat-load-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.chat-load-more:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.chat-load-more svg {
+  opacity: 0.7;
+}
+
 /* Chat Messages */
 .chat-message {
   display: flex;

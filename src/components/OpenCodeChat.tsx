@@ -117,6 +117,10 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
   // We track both the path and a hash of the content so we re-send if the file changed
   const [contextSentForFile, setContextSentForFile] = createSignal<string | null>(null);
   
+  // Lazy loading: only show recent messages initially
+  const INITIAL_MESSAGES_SHOWN = 50;
+  const [showAllMessages, setShowAllMessages] = createSignal(false);
+  
   // Simple hash function for detecting content changes
   const hashContent = (content: string): string => {
     let hash = 0;
@@ -544,12 +548,18 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
     }
   };
 
-  // Auto-resize textarea
+  // Debounced textarea resize to avoid excessive layout recalculations
+  let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
   const handleInput = (e: Event) => {
     const target = e.target as HTMLTextAreaElement;
     setInputText(target.value);
-    target.style.height = 'auto';
-    target.style.height = Math.min(target.scrollHeight, 200) + 'px';
+    
+    // Debounce the resize operation
+    if (resizeTimeout) clearTimeout(resizeTimeout);
+    resizeTimeout = setTimeout(() => {
+      target.style.height = 'auto';
+      target.style.height = Math.min(target.scrollHeight, 200) + 'px';
+    }, 16); // ~1 frame at 60fps
   };
 
   // Toggle context inclusion
@@ -567,6 +577,7 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
     setIsLoading(false);
     setIsStreaming(false);
     setContextSentForFile(null); // Reset context tracking for new session
+    setShowAllMessages(false); // Reset to show only recent messages
     
     // Create a new session
     try {
@@ -856,37 +867,57 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
             </div>
           </Show>
 
-          <For each={messages().filter(hasVisibleContent)}>
-            {(message) => (
-              <div class={`chat-message ${message.role}`}>
-                <div class="chat-message-avatar">
-                  <Show when={message.role === 'user'} fallback={
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+          {/* Lazy loading: show "Load more" if there are many messages */}
+          {(() => {
+            const allMessages = messages().filter(hasVisibleContent);
+            const hiddenCount = showAllMessages() ? 0 : Math.max(0, allMessages.length - INITIAL_MESSAGES_SHOWN);
+            const visibleMessages = showAllMessages() ? allMessages : allMessages.slice(-INITIAL_MESSAGES_SHOWN);
+            
+            return (
+              <>
+                <Show when={hiddenCount > 0}>
+                  <button class="chat-load-more" onClick={() => setShowAllMessages(true)}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="18 15 12 9 6 15"></polyline>
                     </svg>
-                  }>
-                    <Show when={sanitizeImageUrl(userProfile()?.picture)} fallback={
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                        <circle cx="12" cy="7" r="4"></circle>
-                      </svg>
-                    }>
-                      <img 
-                        src={sanitizeImageUrl(userProfile()!.picture)!} 
-                        alt="" 
-                        class="chat-avatar-img" 
-                      />
-                    </Show>
-                  </Show>
-                </div>
-                <div class="chat-message-content">
-                  <For each={message.parts}>
-                    {(part, index) => renderPart(part, index(), message.role)}
-                  </For>
-                </div>
-              </div>
-            )}
-          </For>
+                    Load {hiddenCount} earlier message{hiddenCount > 1 ? 's' : ''}
+                  </button>
+                </Show>
+                
+                <For each={visibleMessages}>
+                  {(message) => (
+                    <div class={`chat-message ${message.role}`}>
+                      <div class="chat-message-avatar">
+                        <Show when={message.role === 'user'} fallback={
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                          </svg>
+                        }>
+                          <Show when={sanitizeImageUrl(userProfile()?.picture)} fallback={
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                              <circle cx="12" cy="7" r="4"></circle>
+                            </svg>
+                          }>
+                            <img 
+                              src={sanitizeImageUrl(userProfile()!.picture)!} 
+                              alt="" 
+                              class="chat-avatar-img" 
+                            />
+                          </Show>
+                        </Show>
+                      </div>
+                      <div class="chat-message-content">
+                        <For each={message.parts}>
+                          {(part, index) => renderPart(part, index(), message.role)}
+                        </For>
+                      </div>
+                    </div>
+                  )}
+                </For>
+              </>
+            );
+          })()}
 
           {/* Streaming indicator */}
           <Show when={isStreaming()}>
