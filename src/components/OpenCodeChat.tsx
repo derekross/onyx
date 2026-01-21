@@ -113,6 +113,9 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
   const [installProgress, setInstallProgress] = createSignal<InstallProgress | null>(null);
   const [installError, setInstallError] = createSignal<string | null>(null);
   
+  // Track if we've already sent context for the current file in this session
+  const [contextSentForFile, setContextSentForFile] = createSignal<string | null>(null);
+  
   // Format model name for display (e.g., "anthropic/claude-3-5-sonnet" -> "Claude 3.5 Sonnet")
   const displayModelName = () => {
     const model = currentModel();
@@ -461,10 +464,12 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
       let prompt = text;
       const file = props.currentFile;
       
-      // Include file context if toggle is on and we have a file open
-      if (file && includeContext()) {
+      // Include file context only on first message for this file (or if file changed)
+      // This avoids sending the full file content with every message
+      if (file && includeContext() && contextSentForFile() !== file.path) {
         const filename = file.path.split('/').pop() || file.path;
         prompt = `[Context: Working on "${filename}"]\n\n${file.content}\n\n---\n\n${text}`;
+        setContextSentForFile(file.path);
       }
       
       // Track the full prompt to filter echoes (including context)
@@ -529,6 +534,7 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
     setError(null);
     setIsLoading(false);
     setIsStreaming(false);
+    setContextSentForFile(null); // Reset context tracking for new session
     
     // Create a new session
     try {
