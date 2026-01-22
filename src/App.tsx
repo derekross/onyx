@@ -43,10 +43,31 @@ interface AppSettings {
 
 type SidebarView = 'files' | 'search' | 'bookmarks';
 
+// Session state type for localStorage persistence
+interface SessionState {
+  tabs: { path: string; name: string }[];  // Don't store content, reload from disk
+  activeTabIndex: number;
+  sidebarWidth: number;
+  sidebarCollapsed: boolean;
+  sidebarView: SidebarView;
+  expandedFolders: string[];
+}
+
 const App: Component = () => {
+  // Load saved session state
+  const savedSession = (): SessionState | null => {
+    try {
+      const stored = localStorage.getItem('session_state');
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  };
+  const session = savedSession();
+
   const [vaultPath, setVaultPath] = createSignal<string | null>(null);
   const [tabs, setTabs] = createSignal<Tab[]>([]);
-  const [activeTabIndex, setActiveTabIndex] = createSignal<number>(-1);
+  const [activeTabIndex, setActiveTabIndex] = createSignal<number>(session?.activeTabIndex ?? -1);
   const [showQuickSwitcher, setShowQuickSwitcher] = createSignal(false);
   const [showCommandPalette, setShowCommandPalette] = createSignal(false);
   const [showSearch, setShowSearch] = createSignal(false);
@@ -57,7 +78,7 @@ const App: Component = () => {
   const [settingsSection, setSettingsSection] = createSignal<string | undefined>(undefined);
   const [showGraphView, setShowGraphView] = createSignal(false);
   const [terminalWidth, setTerminalWidth] = createSignal(500);
-  const [sidebarWidth, setSidebarWidth] = createSignal(260);
+  const [sidebarWidth, setSidebarWidth] = createSignal(session?.sidebarWidth ?? 260);
   let createNoteFromSidebar: (() => void) | null = null;
   let refreshSidebar: (() => void) | null = null;
   let setSearchQuery: ((query: string) => void) | null = null;
@@ -884,14 +905,15 @@ const App: Component = () => {
   const createNewNote = async () => {
     console.log('[App] createNewNote called');
     
-    // First try the sidebar's create function if available
-    if (createNoteFromSidebar) {
+    // On mobile, always use direct creation since the sidebar may not be mounted
+    // On desktop, try the sidebar's create function first for better UX (shows rename input)
+    if (createNoteFromSidebar && !isMobileApp()) {
       console.log('[App] Using sidebar create function');
       createNoteFromSidebar();
       return;
     }
     
-    // Fallback: create note directly (especially for mobile when drawer hasn't been opened)
+    // Direct creation (always used on mobile, fallback on desktop)
     let vault = vaultPath();
     console.log('[App] createNewNote - vault path:', vault);
     

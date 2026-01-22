@@ -42,10 +42,24 @@ pub struct AppSettings {
     pub show_terminal: bool,
 }
 
-fn get_config_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".config").join("onyx")
+fn get_config_dir_with_app(app: &AppHandle) -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        // On Android, use the app's data directory
+        app.path()
+            .app_data_dir()
+            .unwrap_or_else(|_| PathBuf::from("/data/data/com.onyxnotes.dev/files"))
+            .join("config")
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app; // Unused on desktop
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config").join("onyx")
+    }
 }
+
+
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PlatformInfo {
@@ -87,13 +101,13 @@ fn get_platform_info(app: AppHandle) -> PlatformInfo {
     }
 }
 
-fn get_settings_path() -> PathBuf {
-    get_config_dir().join("settings.json")
+fn get_settings_path(app: &AppHandle) -> PathBuf {
+    get_config_dir_with_app(app).join("settings.json")
 }
 
 #[tauri::command]
-fn load_settings() -> Result<AppSettings, String> {
-    let path = get_settings_path();
+fn load_settings(app: AppHandle) -> Result<AppSettings, String> {
+    let path = get_settings_path(&app);
     if !path.exists() {
         return Ok(AppSettings::default());
     }
@@ -102,11 +116,11 @@ fn load_settings() -> Result<AppSettings, String> {
 }
 
 #[tauri::command]
-fn save_settings(settings: AppSettings) -> Result<(), String> {
-    let config_dir = get_config_dir();
+fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), String> {
+    let config_dir = get_config_dir_with_app(&app);
     fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
 
-    let path = get_settings_path();
+    let path = get_settings_path(&app);
     let content = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     fs::write(&path, content).map_err(|e| e.to_string())
 }
