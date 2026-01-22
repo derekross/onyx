@@ -1546,8 +1546,6 @@ const App: Component = () => {
     if (tab === 'files' || tab === 'search' || tab === 'bookmarks') {
       setSidebarView(tab);
       setMobileDrawerOpen(true);
-    } else if (tab === 'notifications') {
-      setShowNotifications(true);
     } else if (tab === 'settings') {
       setShowSettings(true);
     }
@@ -1658,7 +1656,6 @@ const App: Component = () => {
         <MobileNav
           activeTab={mobileNavTab()}
           onTabChange={handleMobileNavChange}
-          unreadNotifications={unreadShareCount()}
         />
       </Show>
 
