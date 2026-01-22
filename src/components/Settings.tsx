@@ -158,6 +158,18 @@ const Settings: Component<SettingsProps> = (props) => {
   const [syncMessage, setSyncMessage] = createSignal<string | null>(null);
   let syncIntervalId: number | null = null;
 
+  // File recovery state
+  interface RecoverableFile {
+    path: string;
+    content: string;
+    deletedAt: number;
+    eventId: string;
+  }
+  const [recoverableFiles, setRecoverableFiles] = createSignal<RecoverableFile[]>([]);
+  const [recoveryLoading, setRecoveryLoading] = createSignal(false);
+  const [recoveryMessage, setRecoveryMessage] = createSignal<string | null>(null);
+  const [recoveringFile, setRecoveringFile] = createSignal<string | null>(null);
+
   // Skills state
   const [availableSkills, setAvailableSkills] = createSignal<SkillInfo[]>([]);
   const [skillStates, setSkillStates] = createSignal<Record<string, SkillState>>({});
@@ -1028,9 +1040,14 @@ const Settings: Component<SettingsProps> = (props) => {
       // Create a map of remote files by path
       const remoteFileMap = new Map(remoteFiles.map(f => [f.data.path, f]));
 
+      // Get locally deleted files that need to be synced
+      const locallyDeletedPaths = JSON.parse(localStorage.getItem('deleted_paths') || '[]') as string[];
+      const localFilePathSet = new Set(localFiles.map(f => f.path));
+
       // Push local files that are new or changed
       let uploadedCount = 0;
       let downloadedCount = 0;
+      let deletedCount = 0;
 
       // Rate limit: delay between uploads to avoid spamming relays
       const UPLOAD_DELAY_MS = 500; // 500ms between uploads
@@ -1055,10 +1072,48 @@ const Settings: Component<SettingsProps> = (props) => {
         remoteFileMap.delete(localFile.path);
       }
 
+      // Process local deletions - sync them to the vault
+      const pathsToKeepTracking: string[] = [];
+      
+      for (const deletedPath of locallyDeletedPaths) {
+        const inRemoteMap = remoteFileMap.has(deletedPath);
+        const inLocalFiles = localFilePathSet.has(deletedPath);
+        
+        // Only process if the file exists on remote and not locally
+        if (inRemoteMap && !inLocalFiles) {
+          setSyncMessage(`Syncing deletion: ${deletedPath}`);
+          try {
+            vault = await engine.deleteFile(vault, deletedPath);
+            deletedCount++;
+          } catch {
+            // Keep tracking this path since deletion failed
+            pathsToKeepTracking.push(deletedPath);
+          }
+        } else if (inLocalFiles) {
+          // File still exists locally (was recreated?), keep tracking
+          pathsToKeepTracking.push(deletedPath);
+        }
+        // Remove from remoteFileMap so we don't re-download it
+        remoteFileMap.delete(deletedPath);
+      }
+      
+      // Update the locally deleted paths - only keep those that need continued tracking
+      localStorage.setItem('deleted_paths', JSON.stringify(pathsToKeepTracking));
+
+
       // Download remote-only files (files on Nostr but not locally)
       for (const [path, remoteFile] of remoteFileMap) {
-        // Skip deleted files
+        // Skip if in vault's deleted list
         if (vault.data.deleted?.some(d => d.path === path)) {
+          continue;
+        }
+        
+        // Skip if locally deleted (but not yet synced)
+        // Also check for folder deletions - if any deleted path is a prefix of this file path
+        const isLocallyDeleted = locallyDeletedPaths.some(deletedPath => 
+          path === deletedPath || path.startsWith(deletedPath + '/')
+        );
+        if (isLocallyDeleted) {
           continue;
         }
 
@@ -1080,6 +1135,7 @@ const Settings: Component<SettingsProps> = (props) => {
       const parts = [];
       if (uploadedCount > 0) parts.push(`${uploadedCount} uploaded`);
       if (downloadedCount > 0) parts.push(`${downloadedCount} downloaded`);
+      if (deletedCount > 0) parts.push(`${deletedCount} deleted`);
       if (parts.length === 0) {
         setSyncMessage(`Sync complete: all ${totalSynced} files up to date`);
       } else {
@@ -1109,6 +1165,135 @@ const Settings: Component<SettingsProps> = (props) => {
     if (e.target === e.currentTarget) {
       props.onClose();
     }
+  };
+
+  // File recovery handlers
+  const handleScanForRecoverableFiles = async () => {
+    if (!signer() || !props.vaultPath) return;
+
+    setRecoveryLoading(true);
+    setRecoveryMessage('Scanning Nostr for deleted files...');
+    setRecoverableFiles([]);
+
+    try {
+      const engine = getSyncEngine();
+      
+      // Fetch all vaults
+      const vaults = await engine.fetchVaults();
+      if (vaults.length === 0) {
+        setRecoveryMessage('No vault found on Nostr.');
+        setRecoveryLoading(false);
+        return;
+      }
+
+      const vault = vaults[0];
+      
+      // Get deleted files from vault index
+      const deletedFiles = vault.data.deleted || [];
+      
+      if (deletedFiles.length === 0) {
+        setRecoveryMessage('No deleted files found.');
+        setRecoveryLoading(false);
+        return;
+      }
+
+      // Fetch the actual file content for each deleted file
+      const recoverable: RecoverableFile[] = [];
+      
+      for (const deleted of deletedFiles) {
+        // Check if we can recover from the lastEventId
+        if (deleted.lastEventId) {
+          // The file content might still be available on relays
+          // For now, we'll show what's in the deleted list
+          recoverable.push({
+            path: deleted.path,
+            content: '', // We'll fetch content when recovering
+            deletedAt: deleted.deletedAt,
+            eventId: deleted.lastEventId,
+          });
+        }
+      }
+
+      setRecoverableFiles(recoverable);
+      setRecoveryMessage(recoverable.length > 0 
+        ? `Found ${recoverable.length} recoverable file(s).`
+        : 'No recoverable files found.');
+    } catch (err) {
+      console.error('Recovery scan failed:', err);
+      setRecoveryMessage(err instanceof Error ? err.message : 'Scan failed');
+    } finally {
+      setRecoveryLoading(false);
+    }
+  };
+
+  const handleRecoverFile = async (file: RecoverableFile) => {
+    if (!props.vaultPath) return;
+
+    setRecoveringFile(file.path);
+    
+    try {
+      const engine = getSyncEngine();
+      
+      // Fetch the file content from Nostr using the event ID
+      const events = await engine['pool'].querySync(
+        engine.getConfig().relays,
+        { ids: [file.eventId] }
+      );
+      
+      if (events.length === 0) {
+        throw new Error('File content not found on relays');
+      }
+      
+      const event = events[0];
+      
+      // Decrypt the content
+      const decrypted = await engine['decryptContent'](event.content);
+      const data = JSON.parse(decrypted);
+      
+      // Write the file locally
+      const fullPath = `${props.vaultPath}/${file.path}`;
+      const parentDir = fullPath.substring(0, fullPath.lastIndexOf('/'));
+      
+      if (parentDir !== props.vaultPath) {
+        await invoke('create_folder', { path: parentDir }).catch(() => {});
+      }
+      
+      await invoke('write_file', { path: fullPath, content: data.content });
+      
+      // Remove from recoverable list
+      setRecoverableFiles(prev => prev.filter(f => f.path !== file.path));
+      
+      // Remove from local deleted_paths if present
+      const deletedPaths = JSON.parse(localStorage.getItem('deleted_paths') || '[]') as string[];
+      const updatedDeleted = deletedPaths.filter(p => p !== file.path);
+      localStorage.setItem('deleted_paths', JSON.stringify(updatedDeleted));
+      
+      setRecoveryMessage(`Recovered: ${file.path}`);
+      
+      // Refresh file explorer
+      props.onSyncComplete?.();
+      
+      // Clear message after 3 seconds
+      setTimeout(() => {
+        setRecoveryMessage(prev => prev === `Recovered: ${file.path}` ? null : prev);
+      }, 3000);
+    } catch (err) {
+      console.error('Recovery failed:', err);
+      setRecoveryMessage(`Failed to recover ${file.path}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setRecoveringFile(null);
+    }
+  };
+
+  const handleClearDeletedHistory = async () => {
+    // Clear local deleted paths tracking
+    localStorage.setItem('deleted_paths', '[]');
+    setRecoverableFiles([]);
+    setRecoveryMessage('Deleted files history cleared.');
+    
+    setTimeout(() => {
+      setRecoveryMessage(null);
+    }, 3000);
   };
 
   // OpenCode path handlers
@@ -2430,6 +2615,81 @@ const Settings: Component<SettingsProps> = (props) => {
                       <span>{syncMessage()}</span>
                     </div>
                   </Show>
+
+                  {/* File Recovery Section */}
+                  <div class="settings-section-title">File Recovery</div>
+                  <div class="settings-notice">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M3 6h18"></path>
+                      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+                      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+                      <line x1="10" y1="11" x2="10" y2="17"></line>
+                      <line x1="14" y1="11" x2="14" y2="17"></line>
+                    </svg>
+                    <p>Recover files that were deleted locally but may still exist on Nostr relays. This is a failsafe for accidental deletions.</p>
+                  </div>
+
+                  <div class="setting-item">
+                    <div class="setting-info">
+                      <div class="setting-name">Scan for recoverable files</div>
+                      <div class="setting-description">Search Nostr for deleted files that can be restored</div>
+                    </div>
+                    <button
+                      class="setting-button"
+                      onClick={handleScanForRecoverableFiles}
+                      disabled={recoveryLoading()}
+                    >
+                      {recoveryLoading() ? 'Scanning...' : 'Scan'}
+                    </button>
+                  </div>
+
+                  <Show when={recoveryMessage()}>
+                    <div class="sync-feedback idle">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                      </svg>
+                      <span>{recoveryMessage()}</span>
+                    </div>
+                  </Show>
+
+                  <Show when={recoverableFiles().length > 0}>
+                    <div class="recoverable-files-list">
+                      <For each={recoverableFiles()}>
+                        {(file) => (
+                          <div class="recoverable-file-item">
+                            <div class="recoverable-file-info">
+                              <div class="recoverable-file-path">{file.path}</div>
+                              <div class="recoverable-file-date">
+                                Deleted: {new Date(file.deletedAt * 1000).toLocaleString()}
+                              </div>
+                            </div>
+                            <button
+                              class="setting-button small"
+                              onClick={() => handleRecoverFile(file)}
+                              disabled={recoveringFile() === file.path}
+                            >
+                              {recoveringFile() === file.path ? 'Recovering...' : 'Recover'}
+                            </button>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
+
+                  <div class="setting-item">
+                    <div class="setting-info">
+                      <div class="setting-name">Clear deletion history</div>
+                      <div class="setting-description">Remove local tracking of deleted files (prevents re-download on next sync)</div>
+                    </div>
+                    <button
+                      class="setting-button secondary"
+                      onClick={handleClearDeletedHistory}
+                    >
+                      Clear History
+                    </button>
+                  </div>
                 </Show>
               </div>
             </Show>

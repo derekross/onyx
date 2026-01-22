@@ -3981,6 +3981,50 @@ body {
   border-width: 2px;
 }
 
+/* File Recovery UI */
+.recoverable-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.recoverable-file-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  background: var(--bg-primary);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.recoverable-file-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.recoverable-file-path {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.recoverable-file-date {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.setting-button.small {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
 /* Login UI */
 .login-tabs {
   display: flex;
@@ -6513,6 +6557,27 @@ body {
 
 .mobile-header-btn.sync-btn.error {
   color: var(--danger);
+}
+
+.mobile-header-btn.notification-btn {
+  position: relative;
+}
+
+.mobile-header-btn .notification-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  background: var(--danger);
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* Mobile Navigation (Bottom Nav) */

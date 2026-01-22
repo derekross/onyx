@@ -1010,10 +1010,49 @@ const App: Component = () => {
     }
   };
 
-  const handleFileDeleted = (path: string) => {
+  const handleFileDeleted = async (path: string) => {
     const idx = tabs().findIndex(t => t.path === path);
     if (idx >= 0) {
       closeTab(idx);
+    }
+    
+    // Track deletion for Nostr sync - store relative path
+    const vault = vaultPath();
+    if (vault) {
+      const deletedPaths = JSON.parse(localStorage.getItem('deleted_paths') || '[]') as string[];
+      const relativePath = path.replace(vault + '/', '');
+      
+      // For folder deletions, track all files that were inside
+      try {
+        const engine = getSyncEngine();
+        const signer = engine.getSigner();
+        if (signer) {
+          const vaults = await engine.fetchVaults();
+          const vaultData = vaults[0];
+          if (vaultData) {
+            // Find all files in vault that start with this folder path
+            const folderPrefix = relativePath + '/';
+            const filesInFolder = vaultData.data.files
+              .filter(f => f.path === relativePath || f.path.startsWith(folderPrefix))
+              .map(f => f.path);
+            
+            for (const filePath of filesInFolder) {
+              if (!deletedPaths.includes(filePath)) {
+                deletedPaths.push(filePath);
+              }
+            }
+          }
+        }
+      } catch {
+        // Could not check for folder contents, will track path as-is
+      }
+      
+      // Also track the path itself (in case it's a file, or as a fallback for folders)
+      if (!deletedPaths.includes(relativePath)) {
+        deletedPaths.push(relativePath);
+      }
+      
+      localStorage.setItem('deleted_paths', JSON.stringify(deletedPaths));
     }
   };
 
@@ -1244,10 +1283,10 @@ const App: Component = () => {
         vault = await engine.createVault('My Notes', 'Default vault');
       }
 
-      // Get local files
+      // Get local files with their full paths
       const entries = await invoke<Array<{ name: string; path: string; isDirectory: boolean; children?: unknown[] }>>('list_files', { path: vaultPath() });
 
-      const localFiles: { path: string; content: string }[] = [];
+      const localFiles: { path: string; fullPath: string; content: string }[] = [];
       const processEntries = async (entries: Array<{ name: string; path: string; isDirectory: boolean; children?: unknown[] }>) => {
         for (const entry of entries) {
           if (entry.isDirectory && entry.children) {
@@ -1255,7 +1294,7 @@ const App: Component = () => {
           } else if (entry.name.endsWith('.md')) {
             const content = await invoke<string>('read_file', { path: entry.path });
             const relativePath = entry.path.replace(vaultPath()! + '/', '');
-            localFiles.push({ path: relativePath, content });
+            localFiles.push({ path: relativePath, fullPath: entry.path, content });
           }
         }
       };
@@ -1265,21 +1304,103 @@ const App: Component = () => {
       const remoteFiles = await engine.fetchVaultFiles(vault);
       const remoteFileMap = new Map(remoteFiles.map(f => [f.data.path, f]));
 
-      // Sync files
+      // Get locally deleted files that need to be synced
+      const locallyDeletedPaths = JSON.parse(localStorage.getItem('deleted_paths') || '[]') as string[];
+      const localFilePathSet = new Set(localFiles.map(f => f.path));
+
+      // Sync files - compare timestamps to determine which version is newer
       let downloadedCount = 0;
+      let uploadedCount = 0;
+      let deletedCount = 0;
 
       for (const localFile of localFiles) {
         const remoteFile = remoteFileMap.get(localFile.path);
-        if (!remoteFile || remoteFile.data.content !== localFile.content) {
-          const result = await engine.publishFile(vault, localFile.path, localFile.content, remoteFile);
+        
+        if (remoteFile) {
+          // File exists both locally and remotely
+          if (remoteFile.data.content !== localFile.content) {
+            // Content differs - compare timestamps to decide direction
+            try {
+              const localModifiedTime = await invoke<number>('get_file_modified_time', { path: localFile.fullPath });
+              const remoteModifiedTime = remoteFile.data.modified;
+              
+              console.log(`[Sync] File ${localFile.path}: local=${localModifiedTime}, remote=${remoteModifiedTime}`);
+              
+              if (remoteModifiedTime > localModifiedTime) {
+                // Remote is newer - download
+                console.log(`[Sync] Downloading newer remote version: ${localFile.path}`);
+                await invoke('write_file', { path: localFile.fullPath, content: remoteFile.data.content });
+                downloadedCount++;
+              } else {
+                // Local is newer or same time - upload
+                console.log(`[Sync] Uploading newer local version: ${localFile.path}`);
+                const result = await engine.publishFile(vault, localFile.path, localFile.content, remoteFile);
+                vault = result.vault;
+                uploadedCount++;
+              }
+            } catch (err) {
+              // If we can't get local modified time, default to uploading
+              console.warn(`[Sync] Could not get modified time for ${localFile.path}, uploading:`, err);
+              const result = await engine.publishFile(vault, localFile.path, localFile.content, remoteFile);
+              vault = result.vault;
+              uploadedCount++;
+            }
+          }
+          // Remove from map - we've handled this file
+          remoteFileMap.delete(localFile.path);
+        } else {
+          // Local-only file - upload to remote
+          console.log(`[Sync] Uploading new local file: ${localFile.path}`);
+          const result = await engine.publishFile(vault, localFile.path, localFile.content);
           vault = result.vault;
+          uploadedCount++;
         }
-        remoteFileMap.delete(localFile.path);
       }
 
-      // Download remote-only files
+      // Process local deletions - sync them to the vault
+      const pathsToKeepTracking: string[] = [];
+      
+      for (const deletedPath of locallyDeletedPaths) {
+        const inRemoteMap = remoteFileMap.has(deletedPath);
+        const inLocalFiles = localFilePathSet.has(deletedPath);
+        
+        // Only process if the file exists on remote and not locally
+        if (inRemoteMap && !inLocalFiles) {
+          try {
+            vault = await engine.deleteFile(vault, deletedPath);
+            deletedCount++;
+          } catch {
+            // Keep tracking this path since deletion failed
+            pathsToKeepTracking.push(deletedPath);
+          }
+        } else if (inLocalFiles) {
+          // File still exists locally (was recreated?), keep tracking
+          pathsToKeepTracking.push(deletedPath);
+        }
+        // Remove from remoteFileMap so we don't re-download it
+        remoteFileMap.delete(deletedPath);
+      }
+      
+      // Update the locally deleted paths - only keep those that need continued tracking
+      localStorage.setItem('deleted_paths', JSON.stringify(pathsToKeepTracking));
+
+
+      // Download remote-only files (files that exist on remote but not locally)
+      // Skip files that were deleted locally or are in the vault's deleted list
       for (const [path, remoteFile] of remoteFileMap) {
-        if (vault.data.deleted?.some(d => d.path === path)) continue;
+        // Skip if in vault's deleted list
+        if (vault.data.deleted?.some(d => d.path === path)) {
+          continue;
+        }
+        
+        // Skip if locally deleted (but not yet synced)
+        // Also check for folder deletions - if any deleted path is a prefix of this file path
+        const isLocallyDeleted = locallyDeletedPaths.some(deletedPath => 
+          path === deletedPath || path.startsWith(deletedPath + '/')
+        );
+        if (isLocallyDeleted) {
+          continue;
+        }
 
         const fullPath = `${vaultPath()}/${path}`;
         const parentDir = fullPath.substring(0, fullPath.lastIndexOf('/'));
@@ -1289,12 +1410,30 @@ const App: Component = () => {
         await invoke('write_file', { path: fullPath, content: remoteFile.data.content });
         downloadedCount++;
       }
+      
+      console.log(`[Sync] Complete: ${uploadedCount} uploaded, ${downloadedCount} downloaded, ${deletedCount} deleted`);
 
       setSyncStatus('idle');
 
-      // Refresh sidebar if files were downloaded
+      // Refresh sidebar and reload open tabs if files were downloaded
       if (downloadedCount > 0) {
         refreshSidebar?.();
+        
+        // Reload any open tabs that may have been updated
+        const currentTabs = tabs();
+        for (let i = 0; i < currentTabs.length; i++) {
+          const tab = currentTabs[i];
+          try {
+            const newContent = await invoke<string>('read_file', { path: tab.path });
+            if (newContent !== tab.content) {
+              setTabs(prev => prev.map((t, idx) => 
+                idx === i ? { ...t, content: newContent, isDirty: false } : t
+              ));
+            }
+          } catch {
+            // File may have been deleted or moved
+          }
+        }
       }
     } catch (err) {
       console.error('Sync failed:', err);
@@ -1407,6 +1546,8 @@ const App: Component = () => {
     if (tab === 'files' || tab === 'search' || tab === 'bookmarks') {
       setSidebarView(tab);
       setMobileDrawerOpen(true);
+    } else if (tab === 'notifications') {
+      setShowNotifications(true);
     } else if (tab === 'settings') {
       setShowSettings(true);
     }
@@ -1428,6 +1569,8 @@ const App: Component = () => {
           title={currentFileTitle()}
           isDirty={currentTab()?.isDirty}
           onMenuClick={() => setMobileDrawerOpen(true)}
+          onNotificationsClick={() => setShowNotifications(true)}
+          unreadNotifications={unreadShareCount()}
           onSyncClick={() => handleStatusBarSync()}
           syncStatus={syncStatus()}
         />

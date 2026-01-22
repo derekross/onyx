@@ -270,6 +270,17 @@ fn create_folder(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_file_modified_time(path: String) -> Result<u64, String> {
+    let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
+    let modified = metadata.modified().map_err(|e| e.to_string())?;
+    // Convert to Unix timestamp (seconds since epoch)
+    let duration = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?;
+    Ok(duration.as_secs())
+}
+
+#[tauri::command]
 fn file_exists(path: String) -> bool {
     Path::new(&path).exists()
 }
@@ -1882,6 +1893,7 @@ pub fn run() {
             read_binary_file,
             create_file,
             create_folder,
+            get_file_modified_time,
             file_exists,
             delete_file,
             rename_file,
