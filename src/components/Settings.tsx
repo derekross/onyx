@@ -843,8 +843,10 @@ const Settings: Component<SettingsProps> = (props) => {
     const url = newRelayUrl().trim();
     if (!url) return;
 
-    // Basic validation
-    if (!url.startsWith('wss://') && !url.startsWith('ws://')) {
+    // Security: Only allow secure WebSocket connections (wss://)
+    // ws:// is unencrypted and vulnerable to MITM attacks
+    if (!url.startsWith('wss://')) {
+      setNewRelayUrl('');
       return;
     }
 
@@ -2918,6 +2920,7 @@ const Settings: Component<SettingsProps> = (props) => {
                       value={newRelayUrl()}
                       onInput={(e) => setNewRelayUrl(e.currentTarget.value)}
                       onKeyPress={(e) => e.key === 'Enter' && handleAddRelay()}
+                      title="Only secure WebSocket connections (wss://) are allowed"
                     />
                     <button class="setting-button" onClick={handleAddRelay}>Add</button>
                   </div>

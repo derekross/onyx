@@ -26,7 +26,7 @@ import {
   type ToolPermission,
 } from '../lib/opencode/client';
 import { getCurrentLogin, getSavedProfile, type UserProfile } from '../lib/nostr/login';
-import { sanitizeImageUrl } from '../lib/security';
+import { sanitizeImageUrl, sanitizeUrl } from '../lib/security';
 
 // Install progress payload from Rust backend
 interface InstallProgress {
@@ -66,8 +66,11 @@ function markdownToHtml(markdown: string): string {
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
   
-  // Links
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  // Links - sanitize URLs to prevent javascript: and other dangerous protocols
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, text, url) => {
+    const safeUrl = sanitizeUrl(url);
+    return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+  });
   
   // Unordered lists
   html = html.replace(/^[\-\*] (.+)$/gm, '<li>$1</li>');

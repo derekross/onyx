@@ -105,6 +105,46 @@ fn get_settings_path(app: &AppHandle) -> PathBuf {
     get_config_dir_with_app(app).join("settings.json")
 }
 
+/// Validates that a path is within the allowed vault directory.
+/// Returns the canonicalized path if valid, or an error if path traversal is detected.
+fn validate_vault_path(path: &str, vault_path: &str) -> Result<PathBuf, String> {
+    let path = Path::new(path);
+    let vault = Path::new(vault_path);
+    
+    // Canonicalize both paths to resolve any .. or symlinks
+    // For non-existent paths (e.g., new files), canonicalize the parent
+    let canonical_path = if path.exists() {
+        path.canonicalize().map_err(|e| format!("Invalid path: {}", e))?
+    } else {
+        // For new files, the parent must exist and be within vault
+        let parent = path.parent().ok_or("Invalid path: no parent directory")?;
+        let canonical_parent = parent.canonicalize().map_err(|e| format!("Invalid path: {}", e))?;
+        canonical_parent.join(path.file_name().ok_or("Invalid path: no filename")?)
+    };
+    
+    let canonical_vault = vault.canonicalize().map_err(|e| format!("Invalid vault path: {}", e))?;
+    
+    // Check if the path starts with the vault path
+    if !canonical_path.starts_with(&canonical_vault) {
+        return Err(format!("Access denied: path '{}' is outside the vault directory", path.display()));
+    }
+    
+    Ok(canonical_path)
+}
+
+/// Check if a path is within the config directory (for settings, not vault files)
+#[allow(dead_code)]
+fn is_config_path(path: &str, app: &AppHandle) -> bool {
+    let path = Path::new(path);
+    let config_dir = get_config_dir_with_app(app);
+    
+    if let (Ok(canonical_path), Ok(canonical_config)) = (path.canonicalize(), config_dir.canonicalize()) {
+        canonical_path.starts_with(&canonical_config)
+    } else {
+        false
+    }
+}
+
 #[tauri::command]
 fn load_settings(app: AppHandle) -> Result<AppSettings, String> {
     let path = get_settings_path(&app);
@@ -229,17 +269,29 @@ fn list_files(path: String) -> Result<Vec<FileEntry>, String> {
 }
 
 #[tauri::command]
-fn read_file(path: String) -> Result<String, String> {
+fn read_file(path: String, vault_path: Option<String>) -> Result<String, String> {
+    // Validate path is within vault if vault_path is provided
+    if let Some(ref vault) = vault_path {
+        validate_vault_path(&path, vault)?;
+    }
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn write_file(path: String, content: String) -> Result<(), String> {
+fn write_file(path: String, content: String, vault_path: Option<String>) -> Result<(), String> {
+    // Validate path is within vault if vault_path is provided
+    if let Some(ref vault) = vault_path {
+        validate_vault_path(&path, vault)?;
+    }
     fs::write(&path, content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn write_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
+fn write_binary_file(path: String, data: Vec<u8>, vault_path: Option<String>) -> Result<(), String> {
+    // Validate path is within vault if vault_path is provided
+    if let Some(ref vault) = vault_path {
+        validate_vault_path(&path, vault)?;
+    }
     // Create parent directories if needed
     if let Some(parent) = Path::new(&path).parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -248,12 +300,20 @@ fn write_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
+fn read_binary_file(path: String, vault_path: Option<String>) -> Result<Vec<u8>, String> {
+    // Validate path is within vault if vault_path is provided
+    if let Some(ref vault) = vault_path {
+        validate_vault_path(&path, vault)?;
+    }
     fs::read(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn create_file(path: String) -> Result<(), String> {
+fn create_file(path: String, vault_path: Option<String>) -> Result<(), String> {
+    // Validate path is within vault if vault_path is provided
+    if let Some(ref vault) = vault_path {
+        validate_vault_path(&path, vault)?;
+    }
     let path = Path::new(&path);
     if path.exists() {
         return Err("File already exists".to_string());
@@ -265,7 +325,11 @@ fn create_file(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn create_folder(path: String) -> Result<(), String> {
+fn create_folder(path: String, vault_path: Option<String>) -> Result<(), String> {
+    // Validate path is within vault if vault_path is provided
+    if let Some(ref vault) = vault_path {
+        validate_vault_path(&path, vault)?;
+    }
     fs::create_dir_all(&path).map_err(|e| e.to_string())
 }
 
@@ -286,7 +350,11 @@ fn file_exists(path: String) -> bool {
 }
 
 #[tauri::command]
-fn delete_file(path: String) -> Result<(), String> {
+fn delete_file(path: String, vault_path: Option<String>) -> Result<(), String> {
+    // Validate path is within vault if vault_path is provided
+    if let Some(ref vault) = vault_path {
+        validate_vault_path(&path, vault)?;
+    }
     let path = Path::new(&path);
     if path.is_dir() {
         fs::remove_dir_all(path).map_err(|e| e.to_string())
@@ -296,12 +364,22 @@ fn delete_file(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn rename_file(old_path: String, new_path: String) -> Result<(), String> {
+fn rename_file(old_path: String, new_path: String, vault_path: Option<String>) -> Result<(), String> {
+    // Validate both paths are within vault if vault_path is provided
+    if let Some(ref vault) = vault_path {
+        validate_vault_path(&old_path, vault)?;
+        validate_vault_path(&new_path, vault)?;
+    }
     fs::rename(&old_path, &new_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn copy_file(source: String, dest: String) -> Result<(), String> {
+fn copy_file(source: String, dest: String, vault_path: Option<String>) -> Result<(), String> {
+    // Validate both paths are within vault if vault_path is provided
+    if let Some(ref vault) = vault_path {
+        validate_vault_path(&source, vault)?;
+        validate_vault_path(&dest, vault)?;
+    }
     let source_path = Path::new(&source);
     let dest_path = Path::new(&dest);
 
@@ -1151,11 +1229,18 @@ mod opencode_installer {
 mod pty {
     use super::*;
     use std::io::Write;
+    use std::time::{Instant, Duration};
+
+    // Maximum PTY session lifetime: 4 hours
+    const PTY_SESSION_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
+    // Maximum number of concurrent PTY sessions
+    const MAX_PTY_SESSIONS: usize = 10;
 
     pub struct PtySession {
         pub writer: Box<dyn Write + Send>,
         pub _child: Box<dyn portable_pty::Child + Send + Sync>,
         pub master: Box<dyn portable_pty::MasterPty + Send>,
+        pub created_at: Instant,
     }
 
     pub struct PtyState {
@@ -1171,6 +1256,21 @@ mod pty {
             }
         }
     }
+    
+    impl PtyState {
+        /// Remove sessions that have exceeded their timeout
+        pub fn cleanup_expired_sessions(&mut self) {
+            let now = Instant::now();
+            self.sessions.retain(|_id, session| {
+                now.duration_since(session.created_at) < PTY_SESSION_TIMEOUT
+            });
+        }
+        
+        /// Check if we can create a new session (respects max limit)
+        pub fn can_create_session(&self) -> bool {
+            self.sessions.len() < MAX_PTY_SESSIONS
+        }
+    }
 
     pub type SharedPtyState = Arc<Mutex<PtyState>>;
 
@@ -1183,6 +1283,15 @@ mod pty {
         cols: u16,
         rows: u16,
     ) -> Result<String, String> {
+        // Security: Clean up expired sessions and check limits
+        {
+            let mut state_guard = state.lock();
+            state_guard.cleanup_expired_sessions();
+            if !state_guard.can_create_session() {
+                return Err("Maximum number of terminal sessions reached. Please close some terminals first.".to_string());
+            }
+        }
+        
         let pty_system = native_pty_system();
 
         let pair = pty_system
@@ -1255,7 +1364,7 @@ mod pty {
             }
         });
 
-        // Store session
+        // Store session with creation timestamp
         {
             let mut state = state.lock();
             state.sessions.insert(
@@ -1264,6 +1373,7 @@ mod pty {
                     writer,
                     _child: child,
                     master: pair.master,
+                    created_at: Instant::now(),
                 },
             );
         }
@@ -1723,6 +1833,7 @@ mod keyring_commands {
 // Combined with biometric authentication in the UI layer for additional security
 #[cfg(target_os = "android")]
 mod keyring_commands {
+    use sha2::{Sha256, Digest};
     use std::fs;
     use std::path::PathBuf;
     use tauri::Manager;
@@ -1743,8 +1854,10 @@ mod keyring_commands {
 
     fn get_key_path(app: &tauri::AppHandle, key: &str) -> Result<PathBuf, String> {
         let secure_dir = get_secure_storage_path(app)?;
-        // Hash the key name to avoid filesystem issues with special characters
-        let hash = format!("{:x}", md5::compute(key.as_bytes()));
+        // Hash the key name using SHA-256 to avoid filesystem issues with special characters
+        let mut hasher = Sha256::new();
+        hasher.update(key.as_bytes());
+        let hash = format!("{:x}", hasher.finalize());
         Ok(secure_dir.join(hash))
     }
 
@@ -1784,7 +1897,7 @@ pub fn run() {
         Arc::new(Mutex::new(OpenCodeServerState::default()));
     let opencode_server_state_clone = opencode_server_state.clone();
 
-    let mut builder = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
@@ -1833,8 +1946,38 @@ pub fn run() {
             } else {
                 decoded_path
             };
+            
+            // Security: Reject paths with traversal sequences
+            if decoded_path.contains("..") {
+                return tauri::http::Response::builder()
+                    .status(403)
+                    .header("Content-Type", "text/plain")
+                    .body("Access denied: path traversal detected".as_bytes().to_vec())
+                    .unwrap();
+            }
+            
+            // Security: Canonicalize path and verify it doesn't escape expected directories
+            let path_obj = Path::new(&decoded_path);
+            let canonical = match path_obj.canonicalize() {
+                Ok(p) => p,
+                Err(_) => {
+                    return tauri::http::Response::builder()
+                        .status(404)
+                        .body(Vec::new())
+                        .unwrap();
+                }
+            };
+            
+            // Only allow access to files (not directories) and common media/document types
+            if !canonical.is_file() {
+                return tauri::http::Response::builder()
+                    .status(403)
+                    .header("Content-Type", "text/plain")
+                    .body("Access denied: not a file".as_bytes().to_vec())
+                    .unwrap();
+            }
 
-            match fs::read(&decoded_path) {
+            match fs::read(&canonical) {
                 Ok(data) => {
                     // Determine MIME type based on extension
                     let mime = match Path::new(&decoded_path)
@@ -1864,7 +2007,7 @@ pub fn run() {
                     tauri::http::Response::builder()
                         .status(200)
                         .header("Content-Type", mime)
-                        .header("Access-Control-Allow-Origin", "*")
+                        .header("Access-Control-Allow-Origin", "tauri://localhost")
                         .body(data)
                         .unwrap()
                 }

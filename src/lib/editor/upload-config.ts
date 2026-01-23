@@ -107,6 +107,12 @@ async function saveFileToVault(file: File, vaultPath: string): Promise<string> {
     // Use writeFile with Uint8Array directly - no JSON serialization overhead
     const arrayBuffer = await file.arrayBuffer();
     console.log('[Upload] Read', arrayBuffer.byteLength, 'bytes from file');
+    
+    // Security: Validate file content matches claimed MIME type
+    if (!validateFileMagicBytes(arrayBuffer, file.type)) {
+      console.error('[Upload] File content does not match claimed MIME type:', file.type);
+      throw new Error('File content does not match the expected type. The file may be corrupted or mislabeled.');
+    }
 
     await writeFile(fullPath, new Uint8Array(arrayBuffer));
     console.log('[Upload] File written successfully');
@@ -410,6 +416,59 @@ function isSupportedFileType(mimeType: string): boolean {
     mimeType.startsWith('audio/') ||
     mimeType === 'application/pdf'
   );
+}
+
+/**
+ * Magic byte signatures for common file types
+ * Used to verify file content matches claimed MIME type
+ */
+const MAGIC_BYTES: Record<string, number[][]> = {
+  // Images
+  'image/jpeg': [[0xFF, 0xD8, 0xFF]],
+  'image/png': [[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]],
+  'image/gif': [[0x47, 0x49, 0x46, 0x38, 0x37, 0x61], [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]], // GIF87a, GIF89a
+  'image/webp': [[0x52, 0x49, 0x46, 0x46]], // RIFF (+ WEBP at offset 8)
+  'image/bmp': [[0x42, 0x4D]], // BM
+  'image/svg+xml': [[0x3C, 0x3F, 0x78, 0x6D, 0x6C], [0x3C, 0x73, 0x76, 0x67]], // <?xml, <svg
+  // Video
+  'video/mp4': [[0x00, 0x00, 0x00], [0x66, 0x74, 0x79, 0x70]], // ftyp at offset 4
+  'video/webm': [[0x1A, 0x45, 0xDF, 0xA3]], // EBML
+  'video/quicktime': [[0x00, 0x00, 0x00]], // Similar to mp4
+  // Audio
+  'audio/mpeg': [[0xFF, 0xFB], [0xFF, 0xFA], [0xFF, 0xF3], [0x49, 0x44, 0x33]], // MP3 frames, ID3
+  'audio/wav': [[0x52, 0x49, 0x46, 0x46]], // RIFF
+  'audio/ogg': [[0x4F, 0x67, 0x67, 0x53]], // OggS
+  'audio/flac': [[0x66, 0x4C, 0x61, 0x43]], // fLaC
+  // Documents
+  'application/pdf': [[0x25, 0x50, 0x44, 0x46]], // %PDF
+};
+
+/**
+ * Validate file content matches the claimed MIME type using magic bytes
+ * Returns true if valid or if MIME type is not in our signature database
+ */
+export function validateFileMagicBytes(data: ArrayBuffer, mimeType: string): boolean {
+  const signatures = MAGIC_BYTES[mimeType];
+  if (!signatures) {
+    // Unknown type - allow but log warning
+    console.warn(`[Security] No magic byte signature for MIME type: ${mimeType}`);
+    return true;
+  }
+  
+  const bytes = new Uint8Array(data);
+  if (bytes.length < 4) {
+    return false; // File too small to validate
+  }
+  
+  // Check if any signature matches
+  return signatures.some(signature => {
+    for (let i = 0; i < signature.length && i < bytes.length; i++) {
+      if (bytes[i] !== signature[i]) {
+        return false;
+      }
+    }
+    return true;
+  });
 }
 
 // Export utilities for use in Editor.tsx drag-drop handler
