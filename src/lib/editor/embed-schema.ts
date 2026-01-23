@@ -75,8 +75,8 @@ export const embedSchema = $nodeSchema('embed', () => ({
 
       text += ']]';
 
-      // Output as raw text to preserve the embed syntax
-      state.addNode('text', undefined, text);
+      // Use 'html' node type to avoid markdown escaping of brackets and pipes
+      state.addNode('html', undefined, text);
     },
   },
 }));

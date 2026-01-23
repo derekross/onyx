@@ -8,9 +8,15 @@ import OpenCodeChat from './OpenCodeChat';
 
 type OpenCodeMode = 'chat' | 'terminal';
 
+interface VaultFile {
+  path: string;
+  name: string;
+}
+
 interface OpenCodePanelProps {
   vaultPath: string | null;
   currentFile?: { path: string; content: string } | null;
+  vaultFiles?: VaultFile[];
   onClose: () => void;
   onOpenSettings?: () => void;
 }
@@ -93,6 +99,7 @@ const OpenCodePanel: Component<OpenCodePanelProps> = (props) => {
           <OpenCodeChat
             vaultPath={props.vaultPath}
             currentFile={props.currentFile}
+            vaultFiles={props.vaultFiles}
           />
         </Show>
         <Show when={mode() === 'terminal'}>

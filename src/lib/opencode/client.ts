@@ -88,7 +88,35 @@ export interface ToolResultPart {
   result: unknown;
 }
 
-export type MessagePart = TextPart | ToolCallPart | ToolResultPart;
+/**
+ * Tool state for active tools (with detailed status)
+ */
+export type ToolStatus = 'pending' | 'running' | 'completed' | 'error';
+
+export interface ToolPart {
+  type: 'tool';
+  id: string;
+  callId: string;
+  toolName: string;
+  status: ToolStatus;
+  title?: string;
+  error?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export type MessagePart = TextPart | ToolCallPart | ToolResultPart | ToolPart;
+
+/**
+ * Active tool info (for real-time display)
+ */
+export interface ActiveTool {
+  id: string;
+  callId: string;
+  toolName: string;
+  status: ToolStatus;
+  title?: string;
+  startTime: number;
+}
 
 /**
  * Chat message structure for the UI
@@ -212,6 +240,22 @@ function parsePart(part: unknown): MessagePart {
       toolCallId: p.toolCallId as string,
       toolName: p.toolName as string,
       result: p.result,
+    };
+  }
+  
+  // Handle tool parts with state (from EventMessagePartUpdated)
+  if (p.type === 'tool') {
+    const state = p.state as Record<string, unknown> | undefined;
+    const status = (state?.status as ToolStatus) || 'pending';
+    return {
+      type: 'tool',
+      id: p.id as string,
+      callId: p.callID as string,
+      toolName: p.tool as string,
+      status,
+      title: state?.title as string | undefined,
+      error: state?.error as string | undefined,
+      metadata: p.metadata as Record<string, unknown> | undefined,
     };
   }
   

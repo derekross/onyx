@@ -120,7 +120,8 @@ export const embedSchema = $nodeSchema('embed', () => ({
         if (node.attrs.height) text += `x${node.attrs.height}`;
       }
       text += ']]';
-      state.addNode('text', undefined, text);
+      // Use 'html' node type to avoid markdown escaping of brackets and pipes
+      state.addNode('html', undefined, text);
     },
   },
 }));

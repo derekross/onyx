@@ -52,7 +52,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
       setInternalExpandedFolders(folders);
     }
   };
-  const [contextMenu, setContextMenu] = createSignal<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
+  const [contextMenu, setContextMenu] = createSignal<{ x: number; y: number; path: string; isDir: boolean; openUpward: boolean } | null>(null);
   const [isCreating, setIsCreating] = createSignal<{ parentPath: string; type: 'file' | 'folder' } | null>(null);
   const [newItemName, setNewItemName] = createSignal('');
   const [isRenaming, setIsRenaming] = createSignal<string | null>(null);
@@ -66,6 +66,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
   const [allCollapsed, setAllCollapsed] = createSignal(false);
   const [showVaultMenu, setShowVaultMenu] = createSignal(false);
   const [deleteConfirm, setDeleteConfirm] = createSignal<{ path: string; name: string } | null>(null);
+  const [moveConfirm, setMoveConfirm] = createSignal<{ sourcePath: string; destPath: string; name: string } | null>(null);
 
   const openVault = async () => {
     try {
@@ -145,7 +146,10 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
   const handleContextMenu = (e: MouseEvent, path: string, isDir: boolean) => {
     e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY, path, isDir });
+    // Check if menu would overflow bottom of screen - estimate menu height ~400px
+    const menuHeight = 400;
+    const openUpward = e.clientY + menuHeight > window.innerHeight;
+    setContextMenu({ x: e.clientX, y: e.clientY, path, isDir, openUpward });
   };
 
   const closeContextMenu = () => {
@@ -320,19 +324,31 @@ const Sidebar: Component<SidebarProps> = (props) => {
       });
 
       if (selected && typeof selected === 'string') {
-        const fileName = sourcePath.split('/').pop();
+        const fileName = sourcePath.split('/').pop() || '';
         const destPath = `${selected}/${fileName}`;
-        await invoke('rename_file', { oldPath: sourcePath, newPath: destPath });
-        await refreshFiles();
-
-        if (props.currentFile === sourcePath) {
-          props.onFileSelect(destPath);
-        }
+        setMoveConfirm({ sourcePath, destPath, name: fileName });
       }
     } catch (err) {
       console.error('Failed to move:', err);
     }
     closeContextMenu();
+  };
+
+  const confirmMove = async () => {
+    const move = moveConfirm();
+    if (!move) return;
+
+    try {
+      await invoke('rename_file', { oldPath: move.sourcePath, newPath: move.destPath });
+      await refreshFiles();
+
+      if (props.currentFile === move.sourcePath) {
+        props.onFileSelect(move.destPath);
+      }
+    } catch (err) {
+      console.error('Failed to move:', err);
+    }
+    setMoveConfirm(null);
   };
 
   // Drag and drop handlers
@@ -378,12 +394,12 @@ const Sidebar: Component<SidebarProps> = (props) => {
     }
   };
 
-  const handleDrop = async (e: DragEvent, targetPath: string) => {
+  const handleDrop = (e: DragEvent, targetPath: string) => {
     e.preventDefault();
     const sourcePath = draggedItem();
     if (!sourcePath) return;
 
-    const fileName = sourcePath.split('/').pop();
+    const fileName = sourcePath.split('/').pop() || '';
     const newPath = `${targetPath}/${fileName}`;
 
     // Don't move to same location
@@ -393,30 +409,21 @@ const Sidebar: Component<SidebarProps> = (props) => {
       return;
     }
 
-    try {
-      await invoke('rename_file', { oldPath: sourcePath, newPath });
-      await refreshFiles();
-
-      // Update current file reference if it was moved
-      if (props.currentFile === sourcePath) {
-        props.onFileSelect(newPath);
-      }
-    } catch (err) {
-      console.error('Failed to move file:', err);
-    }
+    // Show confirmation modal
+    setMoveConfirm({ sourcePath, destPath: newPath, name: fileName });
 
     setDraggedItem(null);
     setDropTarget(null);
   };
 
-  const handleDropOnRoot = async (e: DragEvent) => {
+  const handleDropOnRoot = (e: DragEvent) => {
     e.preventDefault();
     if (!props.vaultPath) return;
 
     const sourcePath = draggedItem();
     if (!sourcePath) return;
 
-    const fileName = sourcePath.split('/').pop();
+    const fileName = sourcePath.split('/').pop() || '';
     const newPath = `${props.vaultPath}/${fileName}`;
 
     // Don't move if already in root
@@ -427,16 +434,8 @@ const Sidebar: Component<SidebarProps> = (props) => {
       return;
     }
 
-    try {
-      await invoke('rename_file', { oldPath: sourcePath, newPath });
-      await refreshFiles();
-
-      if (props.currentFile === sourcePath) {
-        props.onFileSelect(newPath);
-      }
-    } catch (err) {
-      console.error('Failed to move file:', err);
-    }
+    // Show confirmation modal
+    setMoveConfirm({ sourcePath, destPath: newPath, name: fileName });
 
     setDraggedItem(null);
     setDropTarget(null);
@@ -903,8 +902,13 @@ const Sidebar: Component<SidebarProps> = (props) => {
       {/* Context Menu */}
       <Show when={contextMenu()}>
         <div
-          class="context-menu"
-          style={{ left: `${contextMenu()!.x}px`, top: `${contextMenu()!.y}px` }}
+          class={`context-menu ${contextMenu()!.openUpward ? 'open-upward' : ''}`}
+          style={{ 
+            left: `${contextMenu()!.x}px`, 
+            ...(contextMenu()!.openUpward 
+              ? { bottom: `${window.innerHeight - contextMenu()!.y}px` }
+              : { top: `${contextMenu()!.y}px` })
+          }}
         >
           {/* File-specific options */}
           <Show when={!contextMenu()!.isDir}>
@@ -1047,6 +1051,30 @@ const Sidebar: Component<SidebarProps> = (props) => {
             <div class="modal-footer">
               <button class="setting-button secondary" onClick={() => setDeleteConfirm(null)}>Cancel</button>
               <button class="setting-button danger" onClick={confirmDelete}>Delete</button>
+            </div>
+          </div>
+        </div>
+      </Show>
+
+      {/* Move Confirmation Modal */}
+      <Show when={moveConfirm()}>
+        <div class="modal-overlay" onClick={() => setMoveConfirm(null)}>
+          <div class="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div class="modal-header">
+              <h3>Move "{moveConfirm()!.name}"?</h3>
+              <button class="modal-close" onClick={() => setMoveConfirm(null)}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
+            <div class="modal-body">
+              <p>Move to: <code>{moveConfirm()!.destPath}</code></p>
+            </div>
+            <div class="modal-footer">
+              <button class="setting-button secondary" onClick={() => setMoveConfirm(null)}>Cancel</button>
+              <button class="setting-button" onClick={confirmMove}>Move</button>
             </div>
           </div>
         </div>

@@ -18,6 +18,8 @@ import {
   type ChatMessage,
   type MessagePart,
   type SessionInfo,
+  type ActiveTool,
+  type ToolStatus,
 } from '../lib/opencode/client';
 import { getCurrentLogin, getSavedProfile, type UserProfile } from '../lib/nostr/login';
 import { sanitizeImageUrl } from '../lib/security';
@@ -87,9 +89,15 @@ function markdownToHtml(markdown: string): string {
   return html;
 }
 
+interface VaultFile {
+  path: string;
+  name: string;
+}
+
 interface OpenCodeChatProps {
   vaultPath: string | null;
   currentFile?: { path: string; content: string } | null;
+  vaultFiles?: VaultFile[];
 }
 
 const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
@@ -120,6 +128,18 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
   // Lazy loading: only show recent messages initially
   const INITIAL_MESSAGES_SHOWN = 50;
   const [showAllMessages, setShowAllMessages] = createSignal(false);
+  
+  // Active tools being executed (for real-time display)
+  const [activeTools, setActiveTools] = createSignal<ActiveTool[]>([]);
+  
+  // Session status for retry/busy states
+  const [sessionStatus, setSessionStatus] = createSignal<{ type: 'idle' | 'busy' | 'retry'; message?: string; attempt?: number } | null>(null);
+  
+  // @file mention autocomplete state
+  const [mentionedFiles, setMentionedFiles] = createSignal<VaultFile[]>([]);
+  const [showFilePicker, setShowFilePicker] = createSignal(false);
+  const [fileSearchQuery, setFileSearchQuery] = createSignal('');
+  const [selectedFileIndex, setSelectedFileIndex] = createSignal(0);
   
   // Simple hash function for detecting content changes
   const hashContent = (content: string): string => {
@@ -297,9 +317,39 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
       case 'message.part.updated': {
         // The delta text comes directly in properties.delta
         const delta = event.properties?.delta as string | undefined;
-        const part = event.properties?.part as { type?: string; text?: string } | undefined;
+        const part = event.properties?.part as { type?: string; text?: string; tool?: string; state?: { status?: string; title?: string }; callID?: string; id?: string } | undefined;
         
-        // Only process if we have actual delta content
+        // Handle tool part updates (for showing active tools)
+        if (part?.type === 'tool' && part.tool) {
+          const toolStatus = (part.state?.status || 'pending') as ToolStatus;
+          const toolId = part.id || part.callID || '';
+          const toolName = part.tool;
+          const title = part.state?.title;
+          
+          setActiveTools(prev => {
+            // Remove completed/error tools, update or add others
+            if (toolStatus === 'completed' || toolStatus === 'error') {
+              return prev.filter(t => t.id !== toolId);
+            }
+            
+            const existing = prev.find(t => t.id === toolId);
+            if (existing) {
+              return prev.map(t => t.id === toolId ? { ...t, status: toolStatus, title } : t);
+            }
+            
+            return [...prev, {
+              id: toolId,
+              callId: part.callID || '',
+              toolName,
+              status: toolStatus,
+              title,
+              startTime: Date.now(),
+            }];
+          });
+          break;
+        }
+        
+        // Only process if we have actual delta content for text
         if (!delta && !(part?.type === 'text' && part?.text)) {
           break;
         }
@@ -350,12 +400,24 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
       }
       
       case 'session.status': {
-        const status = event.properties?.status as { type?: string } | undefined;
-        if (eventSessionId === currentSessionId && status?.type === 'idle') {
-          setIsStreaming(false);
-          setIsLoading(false);
-          setStreamingContent('');
-          refreshMessages();
+        const status = event.properties?.status as { type?: string; message?: string; attempt?: number } | undefined;
+        if (eventSessionId === currentSessionId) {
+          if (status?.type === 'idle') {
+            setIsStreaming(false);
+            setIsLoading(false);
+            setStreamingContent('');
+            setActiveTools([]);
+            setSessionStatus(null);
+            refreshMessages();
+          } else if (status?.type === 'busy') {
+            setSessionStatus({ type: 'busy' });
+          } else if (status?.type === 'retry') {
+            setSessionStatus({ 
+              type: 'retry', 
+              message: status.message,
+              attempt: status.attempt 
+            });
+          }
         }
         break;
       }
@@ -370,6 +432,8 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
           setIsStreaming(false);
           setIsLoading(false);
           setStreamingContent('');
+          setActiveTools([]);
+          setSessionStatus(null);
           refreshMessages();
         }
         break;
@@ -380,6 +444,8 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
         if (!eventSessionId || eventSessionId === currentSessionId) {
           setIsStreaming(false);
           setIsLoading(false);
+          setActiveTools([]);
+          setSessionStatus(null);
           setError(errorMsg || 'An error occurred');
         }
         break;
@@ -423,13 +489,19 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
         const originalText = part.text;
         let displayText = originalText;
         
-        // Check if this message has our context prefix
-        if (displayText.startsWith('[Context: Working on "')) {
-          // Find the separator and extract just the user's question after it
+        // Check if this message has our context prefix (current file context)
+        // Handles both old format "[Context: Working on "filename"]" and new "[Context: Working on file "path"]"
+        if (displayText.startsWith('[Context: Working on')) {
           const separatorIndex = displayText.indexOf('\n\n---\n\n');
           if (separatorIndex !== -1) {
             displayText = displayText.slice(separatorIndex + 7); // 7 = length of '\n\n---\n\n'
-            console.log('[OpenCodeChat] Stripped context, before:', originalText.slice(0, 100), '... after:', displayText);
+          }
+        }
+        // Check for referenced files context (@mentions)
+        else if (displayText.startsWith('[Referenced files]')) {
+          const separatorIndex = displayText.indexOf('\n\n---\n\n');
+          if (separatorIndex !== -1) {
+            displayText = displayText.slice(separatorIndex + 7);
           }
         }
         
@@ -457,20 +529,28 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
   const handleSend = async () => {
     const text = inputText().trim();
     const sessionId = session()?.id;
+    const filesToMention = mentionedFiles();
     
     if (!text || !sessionId || isLoading()) return;
     
     setInputText('');
+    setMentionedFiles([]); // Clear mentioned files after sending
     setError(null);
     setStreamingContent(''); // Clear any previous streaming content
     setIsLoading(true);
     setIsStreaming(true);
     
+    // Build display text with mentioned files indicator
+    let displayText = text;
+    if (filesToMention.length > 0) {
+      displayText = `[${filesToMention.map(f => f.name).join(', ')}] ${text}`;
+    }
+    
     // Add user message immediately (just the text, not the context)
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
       role: 'user',
-      parts: [{ type: 'text', text }],
+      parts: [{ type: 'text', text: displayText }],
       timestamp: Date.now(),
     };
     setMessages(prev => [...prev, userMessage]);
@@ -480,32 +560,51 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
       let prompt = text;
       const file = props.currentFile;
       
+      // Include mentioned files context
+      if (filesToMention.length > 0) {
+        const fileContexts: string[] = [];
+        for (const f of filesToMention) {
+          try {
+            const content = await invoke<string>('read_file', { path: f.path });
+            const truncated = content.length > 50000 ? content.slice(0, 50000) + '\n[...truncated]' : content;
+            // Include full path so OpenCode can edit the correct file
+            fileContexts.push(`=== File: ${f.path} ===\n${truncated}`);
+          } catch (err) {
+            console.error(`Failed to read file ${f.path}:`, err);
+            fileContexts.push(`=== File: ${f.path} ===\n[Error: Could not read file]`);
+          }
+        }
+        prompt = `[Referenced files]\n\n${fileContexts.join('\n\n')}\n\n---\n\n${text}`;
+      }
       // Include file context only on first message for this file (or if file changed)
       // This avoids sending the full file content with every message
       // We use path + content hash to detect if the file was edited
-      const fileKey = file ? `${file.path}:${hashContent(file.content)}` : null;
-      if (file && includeContext() && contextSentForFile() !== fileKey) {
-        const filename = file.path.split('/').pop() || file.path;
-        
-        // Truncate large files to avoid excessive token usage
-        const MAX_CONTEXT_LINES = 500;
-        const MAX_CONTEXT_CHARS = 50000; // ~12.5k tokens
-        let content = file.content;
-        let truncated = false;
-        
-        const lines = content.split('\n');
-        if (lines.length > MAX_CONTEXT_LINES) {
-          content = lines.slice(0, MAX_CONTEXT_LINES).join('\n');
-          truncated = true;
+      else {
+        const fileKey = file ? `${file.path}:${hashContent(file.content)}` : null;
+        if (file && includeContext() && contextSentForFile() !== fileKey) {
+          // Include full path so OpenCode can edit the correct file
+          const filePath = file.path;
+          
+          // Truncate large files to avoid excessive token usage
+          const MAX_CONTEXT_LINES = 500;
+          const MAX_CONTEXT_CHARS = 50000; // ~12.5k tokens
+          let content = file.content;
+          let truncated = false;
+          
+          const lines = content.split('\n');
+          if (lines.length > MAX_CONTEXT_LINES) {
+            content = lines.slice(0, MAX_CONTEXT_LINES).join('\n');
+            truncated = true;
+          }
+          if (content.length > MAX_CONTEXT_CHARS) {
+            content = content.slice(0, MAX_CONTEXT_CHARS);
+            truncated = true;
+          }
+          
+          const truncateNote = truncated ? `\n\n[Note: File truncated - showing first ${MAX_CONTEXT_LINES} lines or ${Math.round(MAX_CONTEXT_CHARS/1000)}k chars]` : '';
+          prompt = `[Context: Working on file "${filePath}"]${truncateNote}\n\n${content}\n\n---\n\n${text}`;
+          setContextSentForFile(fileKey);
         }
-        if (content.length > MAX_CONTEXT_CHARS) {
-          content = content.slice(0, MAX_CONTEXT_CHARS);
-          truncated = true;
-        }
-        
-        const truncateNote = truncated ? `\n\n[Note: File truncated - showing first ${MAX_CONTEXT_LINES} lines or ${Math.round(MAX_CONTEXT_CHARS/1000)}k chars]` : '';
-        prompt = `[Context: Working on "${filename}"]${truncateNote}\n\n${content}\n\n---\n\n${text}`;
-        setContextSentForFile(fileKey);
       }
       
       // Track the full prompt to filter echoes (including context)
@@ -523,8 +622,47 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
     }
   };
 
+  // Get filtered files for the file picker
+  const filteredFiles = () => {
+    const query = fileSearchQuery().toLowerCase();
+    const files = props.vaultFiles || [];
+    if (!query) return files.slice(0, 10); // Show first 10 when no query
+    return files
+      .filter(f => f.name.toLowerCase().includes(query) || f.path.toLowerCase().includes(query))
+      .slice(0, 10);
+  };
+
   // Handle keyboard shortcuts
   const handleKeyDown = (e: KeyboardEvent) => {
+    // Handle file picker navigation
+    if (showFilePicker()) {
+      const files = filteredFiles();
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedFileIndex(i => Math.min(i + 1, files.length - 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedFileIndex(i => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const selected = files[selectedFileIndex()];
+        if (selected) {
+          selectFile(selected);
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowFilePicker(false);
+        setFileSearchQuery('');
+        return;
+      }
+    }
+    
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -532,6 +670,32 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
     if (e.key === 'Escape' && isStreaming()) {
       handleAbort();
     }
+  };
+  
+  // Select a file from the picker
+  const selectFile = (file: VaultFile) => {
+    // Add to mentioned files if not already there
+    setMentionedFiles(prev => {
+      if (prev.some(f => f.path === file.path)) return prev;
+      return [...prev, file];
+    });
+    
+    // Remove the @query from input and close picker
+    const text = inputText();
+    const atIndex = text.lastIndexOf('@');
+    if (atIndex !== -1) {
+      setInputText(text.substring(0, atIndex));
+    }
+    
+    setShowFilePicker(false);
+    setFileSearchQuery('');
+    setSelectedFileIndex(0);
+    inputRef?.focus();
+  };
+  
+  // Remove a mentioned file
+  const removeMentionedFile = (path: string) => {
+    setMentionedFiles(prev => prev.filter(f => f.path !== path));
   };
 
   // Abort current operation
@@ -552,7 +716,27 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
   let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
   const handleInput = (e: Event) => {
     const target = e.target as HTMLTextAreaElement;
-    setInputText(target.value);
+    const value = target.value;
+    setInputText(value);
+    
+    // Check for @ mention trigger
+    const cursorPos = target.selectionStart || 0;
+    const textBeforeCursor = value.substring(0, cursorPos);
+    const atIndex = textBeforeCursor.lastIndexOf('@');
+    
+    if (atIndex !== -1 && (atIndex === 0 || textBeforeCursor[atIndex - 1] === ' ' || textBeforeCursor[atIndex - 1] === '\n')) {
+      // Check if we're still in the @ mention (no space after @)
+      const afterAt = textBeforeCursor.substring(atIndex + 1);
+      if (!afterAt.includes(' ') && !afterAt.includes('\n')) {
+        setFileSearchQuery(afterAt);
+        setShowFilePicker(true);
+        setSelectedFileIndex(0);
+      } else {
+        setShowFilePicker(false);
+      }
+    } else {
+      setShowFilePicker(false);
+    }
     
     // Debounce the resize operation
     if (resizeTimeout) clearTimeout(resizeTimeout);
@@ -928,13 +1112,46 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
                 </svg>
               </div>
               <div class="chat-message-content">
+                {/* Show active tools */}
+                <Show when={activeTools().length > 0}>
+                  <div class="chat-active-tools">
+                    <For each={activeTools()}>
+                      {(tool) => (
+                        <div class={`chat-active-tool ${tool.status}`}>
+                          <div class="tool-spinner"></div>
+                          <span class="tool-name">{tool.toolName}</span>
+                          <Show when={tool.title}>
+                            <span class="tool-title">{tool.title}</span>
+                          </Show>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+                
+                {/* Show retry status */}
+                <Show when={sessionStatus()?.type === 'retry'}>
+                  <div class="chat-retry-status">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="23 4 23 10 17 10"></polyline>
+                      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                    </svg>
+                    <span>Retrying{sessionStatus()?.attempt ? ` (attempt ${sessionStatus()!.attempt})` : ''}...</span>
+                    <Show when={sessionStatus()?.message}>
+                      <span class="retry-message">{sessionStatus()!.message}</span>
+                    </Show>
+                  </div>
+                </Show>
+                
                 {/* Only show actual content, not echo marker content */}
                 <Show when={streamingContent().length > 0 && !streamingContent().startsWith('\x00ECHO\x00')} fallback={
-                  <div class="typing-indicator">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                  </div>
+                  <Show when={activeTools().length === 0 && sessionStatus()?.type !== 'retry'}>
+                    <div class="typing-indicator">
+                      <span></span>
+                      <span></span>
+                      <span></span>
+                    </div>
+                  </Show>
                 }>
                   <div class="chat-message-text markdown" innerHTML={markdownToHtml(streamingContent())} />
                 </Show>
@@ -997,11 +1214,67 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
               <span>{displayModelName()}</span>
             </div>
           </div>
+          {/* Mentioned files chips */}
+          <Show when={mentionedFiles().length > 0}>
+            <div class="chat-mentioned-files">
+              <For each={mentionedFiles()}>
+                {(file) => (
+                  <div class="mentioned-file-chip">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                      <polyline points="14 2 14 8 20 8"></polyline>
+                    </svg>
+                    <span>{file.name}</span>
+                    <button 
+                      class="remove-file-btn"
+                      onClick={() => removeMentionedFile(file.path)}
+                      title="Remove file"
+                    >
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                      </svg>
+                    </button>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
+          
           <div class="chat-input-wrapper">
+            {/* File picker dropdown */}
+            <Show when={showFilePicker() && filteredFiles().length > 0}>
+              <div class="chat-file-picker">
+                <div class="file-picker-header">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <path d="m21 21-4.35-4.35"></path>
+                  </svg>
+                  <span>Select a file to reference</span>
+                </div>
+                <For each={filteredFiles()}>
+                  {(file, index) => (
+                    <div 
+                      class={`file-picker-item ${index() === selectedFileIndex() ? 'selected' : ''}`}
+                      onClick={() => selectFile(file)}
+                      onMouseEnter={() => setSelectedFileIndex(index())}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                      </svg>
+                      <span class="file-name">{file.name}</span>
+                      <span class="file-path">{file.path.split('/').slice(-2, -1)[0] || ''}</span>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </Show>
+            
             <textarea
               ref={inputRef}
               class="chat-input"
-              placeholder="Ask OpenCode anything..."
+              placeholder="Ask OpenCode anything... (type @ to reference files)"
               value={inputText()}
               onInput={handleInput}
               onKeyDown={handleKeyDown}

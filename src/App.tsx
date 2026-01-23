@@ -380,18 +380,27 @@ const App: Component = () => {
       for (const modifiedPath of modifiedPaths) {
         const tabIndex = currentTabs.findIndex(tab => tab.path === modifiedPath);
         if (tabIndex !== -1) {
-          const tab = currentTabs[tabIndex];
-          // Only reload if the tab is not dirty (no unsaved changes)
-          if (!tab.isDirty) {
-            try {
-              const newContent = await invoke<string>('read_file', { path: modifiedPath });
-              // Update tab content
+          try {
+            const newContent = await invoke<string>('read_file', { path: modifiedPath });
+            const tab = currentTabs[tabIndex];
+            
+            // If the content is different from what we have, reload it
+            // This handles both dirty and non-dirty cases - external changes take precedence
+            // (e.g., OpenCode editing a file should always be reflected in the editor)
+            if (newContent !== tab.content) {
+              // Cancel any pending autosave to prevent overwriting external changes
+              if (autoSaveTimeout) {
+                clearTimeout(autoSaveTimeout);
+                autoSaveTimeout = null;
+              }
+              
+              // Update tab content and clear dirty flag since we're syncing with disk
               setTabs(prevTabs => prevTabs.map((t, i) =>
-                i === tabIndex ? { ...t, content: newContent } : t
+                i === tabIndex ? { ...t, content: newContent, isDirty: false } : t
               ));
-            } catch (err) {
-              console.error('Failed to reload file:', modifiedPath, err);
             }
+          } catch (err) {
+            console.error('Failed to reload file:', modifiedPath, err);
           }
         }
       }
@@ -1953,6 +1962,10 @@ const App: Component = () => {
               <OpenCodePanel
                 vaultPath={vaultPath()}
                 currentFile={currentTab() ? { path: currentTab()!.path, content: currentTab()!.content } : null}
+                vaultFiles={noteIndex() ? Array.from(noteIndex()!.allPaths).map(path => ({
+                  path,
+                  name: path.split('/').pop()?.replace(/\.md$/i, '') || path
+                })) : []}
                 onClose={() => setShowTerminal(false)}
                 onOpenSettings={() => {
                   setSettingsSection('opencode');
