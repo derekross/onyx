@@ -1583,11 +1583,11 @@ fn stop_watching(state: tauri::State<'_, SharedWatcherState>) -> Result<(), Stri
 fn get_skills_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
-        // Windows: %APPDATA%\.opencode\skills
+        // Windows: %APPDATA%\opencode\skills (no leading dot on Windows)
         if let Some(appdata) = dirs::data_dir() {
-            appdata.join(".opencode").join("skills")
+            appdata.join("opencode").join("skills")
         } else {
-            PathBuf::from("C:\\.opencode\\skills")
+            PathBuf::from("C:\\opencode\\skills")
         }
     }
     #[cfg(not(target_os = "windows"))]
@@ -1609,11 +1609,26 @@ fn skill_is_installed(skill_id: String) -> bool {
 
 #[tauri::command]
 fn skill_save_file(skill_id: String, file_name: String, content: String) -> Result<(), String> {
-    let skill_dir = get_skills_dir().join(&skill_id);
-    fs::create_dir_all(&skill_dir).map_err(|e| e.to_string())?;
+    let skills_dir = get_skills_dir();
+    let skill_dir = skills_dir.join(&skill_id);
+    
+    // Create the skills directory first if it doesn't exist
+    fs::create_dir_all(&skill_dir).map_err(|e| {
+        format!(
+            "Failed to create skill directory '{}': {}",
+            skill_dir.display(),
+            e
+        )
+    })?;
 
     let file_path = skill_dir.join(&file_name);
-    fs::write(&file_path, content).map_err(|e| e.to_string())
+    fs::write(&file_path, &content).map_err(|e| {
+        format!(
+            "Failed to write file '{}': {}",
+            file_path.display(),
+            e
+        )
+    })
 }
 
 #[tauri::command]
