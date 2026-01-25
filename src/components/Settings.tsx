@@ -187,6 +187,20 @@ const Settings: Component<SettingsProps> = (props) => {
   const [skillsShInstalling, setSkillsShInstalling] = createSignal<string | null>(null);
   const [skillsShInstalled, setSkillsShInstalled] = createSignal<Set<string>>(new Set());
 
+  // Skill edit modal state
+  const [editingSkill, setEditingSkill] = createSignal<{
+    skillId: string;
+    skillName: string;
+    content: string;
+    originalContent: string;
+    isCustom: boolean;
+    saving: boolean;
+    resetting: boolean;
+  } | null>(null);
+  const [skillModified, setSkillModified] = createSignal<Set<string>>(new Set(
+    JSON.parse(localStorage.getItem('skill_modified_ids') || '[]')
+  ));
+
   // Modal dialog state
   const [modalConfig, setModalConfig] = createSignal<{
     type: 'confirm' | 'info';
@@ -616,12 +630,21 @@ const Settings: Component<SettingsProps> = (props) => {
     } else {
       // Disable = remove the skill (with confirmation)
       const isCustom = skill.isCustom;
+      const isModified = skillModified().has(skillId);
+      
+      let message: string;
+      if (isCustom) {
+        message = 'This will delete the custom skill from your system. You will need to re-import it to use it again.';
+      } else if (isModified) {
+        message = 'You have customized this skill. Removing it will delete your changes. You can re-enable it later, but your customizations will be lost.';
+      } else {
+        message = 'This will delete the skill files from your system. You can re-enable it later to download again.';
+      }
+      
       setModalConfig({
         type: 'confirm',
         title: `Remove "${skill.name}" skill?`,
-        message: isCustom
-          ? 'This will delete the custom skill from your system. You will need to re-import it to use it again.'
-          : 'This will delete the skill files from your system. You can re-enable it later to download again.',
+        message,
         onConfirm: async () => {
           try {
             await invoke('skill_delete', { skillId });
@@ -633,6 +656,13 @@ const Settings: Component<SettingsProps> = (props) => {
             if (isCustom) {
               setAvailableSkills(prev => prev.filter(s => s.id !== skillId));
             }
+            // Remove from modified set
+            if (isModified) {
+              const modified = new Set(skillModified());
+              modified.delete(skillId);
+              setSkillModified(modified);
+              localStorage.setItem('skill_modified_ids', JSON.stringify([...modified]));
+            }
           } catch (err) {
             console.error(`Failed to remove skill ${skillId}:`, err);
           }
@@ -641,6 +671,125 @@ const Settings: Component<SettingsProps> = (props) => {
       });
     }
   };
+
+  // Open skill editor modal
+  const handleEditSkill = async (skill: SkillInfo) => {
+    try {
+      const content = await invoke<string>('skill_read_file', { skillId: skill.id, fileName: 'SKILL.md' });
+      setEditingSkill({
+        skillId: skill.id,
+        skillName: skill.name,
+        content,
+        originalContent: content,
+        isCustom: skill.isCustom || false,
+        saving: false,
+        resetting: false,
+      });
+    } catch (err) {
+      console.error(`Failed to read skill ${skill.id}:`, err);
+      setModalConfig({
+        type: 'info',
+        title: 'Error',
+        message: `Failed to read skill file: ${err instanceof Error ? err.message : 'Unknown error'}`
+      });
+    }
+  };
+
+  // Save skill edits
+  const handleSaveSkillEdit = async () => {
+    const editing = editingSkill();
+    if (!editing) return;
+
+    setEditingSkill({ ...editing, saving: true });
+
+    try {
+      await invoke('skill_save_file', { skillId: editing.skillId, fileName: 'SKILL.md', content: editing.content });
+      
+      // Mark as modified if content changed from original (for non-custom skills)
+      if (!editing.isCustom && editing.content !== editing.originalContent) {
+        const modified = new Set(skillModified());
+        modified.add(editing.skillId);
+        setSkillModified(modified);
+        localStorage.setItem('skill_modified_ids', JSON.stringify([...modified]));
+      }
+      
+      // Update the skill name in the list if it changed
+      const newName = parseSkillName(editing.content, editing.skillId);
+      if (newName !== editing.skillName) {
+        setAvailableSkills(prev => prev.map(s => 
+          s.id === editing.skillId ? { ...s, name: newName } : s
+        ));
+      }
+
+      setEditingSkill(null);
+    } catch (err) {
+      console.error(`Failed to save skill ${editing.skillId}:`, err);
+      setEditingSkill({ ...editing, saving: false });
+      setModalConfig({
+        type: 'info',
+        title: 'Error',
+        message: `Failed to save skill: ${err instanceof Error ? err.message : 'Unknown error'}`
+      });
+    }
+  };
+
+  // Reset skill to original version (re-download from manifest)
+  const handleResetSkill = async () => {
+    const editing = editingSkill();
+    if (!editing || editing.isCustom) return;
+
+    setEditingSkill({ ...editing, resetting: true });
+
+    try {
+      // Find the skill in availableSkills to get the files list
+      const skill = availableSkills().find(s => s.id === editing.skillId);
+      if (!skill) throw new Error('Skill not found');
+
+      // Re-download all skill files
+      for (const file of skill.files) {
+        const fileUrl = `${SKILLS_BASE_URL}/${editing.skillId}/${file}`;
+        const response = await fetch(fileUrl);
+        if (!response.ok) {
+          throw new Error(`Failed to download ${file}`);
+        }
+        const content = await response.text();
+        await invoke('skill_save_file', { skillId: editing.skillId, fileName: file, content });
+      }
+
+      // Remove from modified set
+      const modified = new Set(skillModified());
+      modified.delete(editing.skillId);
+      setSkillModified(modified);
+      localStorage.setItem('skill_modified_ids', JSON.stringify([...modified]));
+
+      // Reload the skill content
+      const newContent = await invoke<string>('skill_read_file', { skillId: editing.skillId, fileName: 'SKILL.md' });
+      
+      // Update the skill name in case it was changed
+      const newName = parseSkillName(newContent, editing.skillId);
+      setAvailableSkills(prev => prev.map(s => 
+        s.id === editing.skillId ? { ...s, name: newName } : s
+      ));
+
+      setEditingSkill({
+        ...editing,
+        content: newContent,
+        originalContent: newContent,
+        resetting: false,
+      });
+    } catch (err) {
+      console.error(`Failed to reset skill ${editing.skillId}:`, err);
+      setEditingSkill({ ...editing, resetting: false });
+      setModalConfig({
+        type: 'info',
+        title: 'Error',
+        message: `Failed to reset skill: ${err instanceof Error ? err.message : 'Unknown error'}`
+      });
+    }
+  };
+
+  // Check if a skill has been modified
+  const isSkillModifiedLocally = (skillId: string) => skillModified().has(skillId);
 
   // Get icon for skill category
   const getSkillIcon = (icon: string) => {
@@ -2440,6 +2589,7 @@ const Settings: Component<SettingsProps> = (props) => {
                       })}>
                         {(skill) => {
                           const state = () => skillStates()[skill.id] || { installed: false, enabled: false, downloading: false };
+                          const isModified = () => isSkillModifiedLocally(skill.id);
                           return (
                             <div class={`skill-item enabled`}>
                               <div class="skill-icon">
@@ -2453,20 +2603,21 @@ const Settings: Component<SettingsProps> = (props) => {
                                   <Show when={skill.isCustom}>
                                     <span class="skill-badge custom">Custom</span>
                                   </Show>
+                                  <Show when={!skill.isCustom && isModified()}>
+                                    <span class="skill-badge modified">Modified</span>
+                                  </Show>
                                 </div>
                                 <p class="skill-description">{skill.description}</p>
                                 <span class="skill-category">{skill.category}</span>
                               </div>
                               <div class="skill-actions">
                                 <button
-                                  class="skill-source-btn"
-                                  onClick={() => open(`${SKILLS_BASE_URL}/${skill.id}/SKILL.md`)}
-                                  title="View source on GitHub"
+                                  class="skill-edit-btn"
+                                  onClick={() => handleEditSkill(skill)}
+                                  title="Edit skill"
                                 >
                                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-                                    <polyline points="15 3 21 3 21 9"></polyline>
-                                    <line x1="10" y1="14" x2="21" y2="3"></line>
+                                    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
                                   </svg>
                                 </button>
                                 <label class="setting-toggle">
@@ -3142,6 +3293,73 @@ const Settings: Component<SettingsProps> = (props) => {
                 <Show when={modalConfig()!.type === 'info'}>
                   <button class="setting-button" onClick={() => setModalConfig(null)}>OK</button>
                 </Show>
+              </div>
+            </div>
+          </div>
+        </Show>
+
+        {/* Skill Edit Modal */}
+        <Show when={editingSkill()}>
+          <div class="modal-overlay" onClick={() => setEditingSkill(null)}>
+            <div class="modal-dialog skill-edit-modal" onClick={(e) => e.stopPropagation()}>
+              <div class="modal-header">
+                <h3>Edit "{editingSkill()!.skillName}"</h3>
+                <button class="modal-close" onClick={() => setEditingSkill(null)}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </div>
+              <div class="modal-body skill-edit-body">
+                <textarea
+                  class="skill-edit-textarea"
+                  value={editingSkill()!.content}
+                  onInput={(e) => setEditingSkill({
+                    ...editingSkill()!,
+                    content: e.currentTarget.value
+                  })}
+                  placeholder="Enter skill content in Markdown format..."
+                  disabled={editingSkill()!.saving || editingSkill()!.resetting}
+                />
+              </div>
+              <div class="modal-footer skill-edit-footer">
+                <Show when={!editingSkill()!.isCustom}>
+                  <button
+                    class="setting-button secondary"
+                    onClick={handleResetSkill}
+                    disabled={editingSkill()!.saving || editingSkill()!.resetting}
+                    title="Reset to original version from the repository"
+                  >
+                    {editingSkill()!.resetting ? (
+                      <>
+                        <div class="spinner small"></div>
+                        Resetting...
+                      </>
+                    ) : 'Reset to Default'}
+                  </button>
+                </Show>
+                <div class="skill-edit-footer-right">
+                  <button
+                    class="setting-button secondary"
+                    onClick={() => setEditingSkill(null)}
+                    disabled={editingSkill()!.saving || editingSkill()!.resetting}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    class="setting-button primary"
+                    onClick={handleSaveSkillEdit}
+                    disabled={editingSkill()!.saving || editingSkill()!.resetting}
+                  >
+                    {editingSkill()!.saving ? (
+                      <>
+                        <div class="spinner small"></div>
+                        Saving...
+                      </>
+                    ) : 'Save'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>

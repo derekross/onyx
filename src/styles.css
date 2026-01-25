@@ -3995,6 +3995,98 @@ body {
   background: var(--accent-muted);
 }
 
+.skill-edit-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  padding: 6px;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s, background 0.2s;
+}
+
+.skill-edit-btn:hover {
+  color: var(--accent);
+  background: var(--accent-muted);
+}
+
+.skill-badge.modified {
+  background: var(--warning-muted, rgba(234, 179, 8, 0.15));
+  color: var(--warning, #eab308);
+}
+
+/* Skill Edit Modal */
+.skill-edit-modal {
+  max-width: 700px;
+  width: 95%;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.skill-edit-body {
+  flex: 1;
+  min-height: 0;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+.skill-edit-textarea {
+  flex: 1;
+  min-height: 400px;
+  width: 100%;
+  padding: 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.skill-edit-textarea:focus {
+  border-color: var(--accent);
+}
+
+.skill-edit-textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.skill-edit-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.skill-edit-footer-right {
+  display: flex;
+  gap: 8px;
+}
+
+.skill-edit-footer .setting-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.skill-edit-footer .spinner.small {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
+
 /* Skills Tabs */
 .skills-tabs {
   display: flex;
