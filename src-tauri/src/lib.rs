@@ -1581,11 +1581,24 @@ fn stop_watching(state: tauri::State<'_, SharedWatcherState>) -> Result<(), Stri
 
 // Skills directory management
 fn get_skills_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home)
-        .join(".config")
-        .join("opencode")
-        .join("skills")
+    #[cfg(target_os = "windows")]
+    {
+        // Windows: %APPDATA%\.opencode\skills
+        if let Some(appdata) = dirs::data_dir() {
+            appdata.join(".opencode").join("skills")
+        } else {
+            PathBuf::from("C:\\.opencode\\skills")
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // macOS/Linux: ~/.opencode/skills
+        if let Ok(home) = std::env::var("HOME") {
+            PathBuf::from(home).join(".opencode").join("skills")
+        } else {
+            PathBuf::from(".").join(".opencode").join("skills")
+        }
+    }
 }
 
 #[tauri::command]
