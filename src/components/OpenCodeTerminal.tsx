@@ -29,7 +29,7 @@ const OpenCodeTerminal: Component<OpenCodeTerminalProps> = (props) => {
     terminal = new Terminal({
       cursorBlink: true,
       fontSize: 14,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      fontFamily: 'Menlo, Monaco, Consolas, "Cascadia Mono", "Lucida Console", "Courier New", monospace',
       theme: {
         background: '#1e1e1e',
         foreground: '#cccccc',
