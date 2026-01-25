@@ -1,6 +1,6 @@
 [package]
 name = "onyx"
-version = "0.9.3"
+version = "0.9.4"
 description = "Open source knowledge base and note-taking app"
 authors = ["you"]
 license = "MIT"
