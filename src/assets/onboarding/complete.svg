@@ -1,0 +1,55 @@
+<svg width="200" height="150" viewBox="0 0 200 150" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="completeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22c55e"/>
+      <stop offset="100%" stop-color="#16a34a"/>
+    </linearGradient>
+    <radialGradient id="completeGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#22c55e" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#22c55e" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  
+  <!-- Glow effect -->
+  <circle cx="100" cy="75" r="55" fill="url(#completeGlow)"/>
+  
+  <!-- Main circle -->
+  <circle cx="100" cy="75" r="40" fill="url(#completeGradient)"/>
+  
+  <!-- Checkmark -->
+  <path d="M80 75 L93 88 L120 61" stroke="white" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  
+  <!-- Confetti particles -->
+  <!-- Purple confetti -->
+  <rect x="45" y="35" width="8" height="4" rx="1" fill="#8b5cf6" transform="rotate(25 49 37)"/>
+  <rect x="150" y="40" width="6" height="3" rx="1" fill="#8b5cf6" transform="rotate(-15 153 41.5)"/>
+  <rect x="55" y="110" width="7" height="3" rx="1" fill="#8b5cf6" transform="rotate(10 58.5 111.5)"/>
+  <rect x="140" y="105" width="8" height="4" rx="1" fill="#8b5cf6" transform="rotate(-20 144 107)"/>
+  
+  <!-- Yellow confetti -->
+  <rect x="60" y="25" width="6" height="3" rx="1" fill="#fbbf24" transform="rotate(-30 63 26.5)"/>
+  <rect x="155" y="70" width="7" height="3" rx="1" fill="#fbbf24" transform="rotate(20 158.5 71.5)"/>
+  <rect x="35" y="85" width="6" height="3" rx="1" fill="#fbbf24" transform="rotate(-10 38 86.5)"/>
+  
+  <!-- Pink confetti -->
+  <rect x="130" y="25" width="7" height="3" rx="1" fill="#ec4899" transform="rotate(15 133.5 26.5)"/>
+  <rect x="40" y="60" width="6" height="3" rx="1" fill="#ec4899" transform="rotate(-25 43 61.5)"/>
+  <rect x="160" y="95" width="6" height="3" rx="1" fill="#ec4899" transform="rotate(30 163 96.5)"/>
+  
+  <!-- Blue confetti -->
+  <rect x="75" y="120" width="6" height="3" rx="1" fill="#3b82f6" transform="rotate(-5 78 121.5)"/>
+  <rect x="120" y="115" width="7" height="3" rx="1" fill="#3b82f6" transform="rotate(25 123.5 116.5)"/>
+  <rect x="165" y="55" width="5" height="2.5" rx="1" fill="#3b82f6" transform="rotate(-35 167.5 56.25)"/>
+  
+  <!-- Circle confetti -->
+  <circle cx="50" cy="45" r="3" fill="#8b5cf6" opacity="0.7"/>
+  <circle cx="160" y="85" r="2.5" fill="#fbbf24" opacity="0.7"/>
+  <circle cx="45" cy="100" r="2" fill="#ec4899" opacity="0.7"/>
+  <circle cx="155" cy="30" r="3" fill="#22c55e" opacity="0.6"/>
+  <circle cx="35" cy="70" r="2" fill="#3b82f6" opacity="0.7"/>
+  
+  <!-- Star sparkles -->
+  <path d="M170 45 L172 50 L177 52 L172 54 L170 59 L168 54 L163 52 L168 50 Z" fill="#fbbf24"/>
+  <path d="M30 45 L31.5 49 L35.5 50.5 L31.5 52 L30 56 L28.5 52 L24.5 50.5 L28.5 49 Z" fill="#8b5cf6"/>
+  <path d="M100 130 L101.5 134 L105.5 135.5 L101.5 137 L100 141 L98.5 137 L94.5 135.5 L98.5 134 Z" fill="#22c55e" opacity="0.8"/>
+</svg>

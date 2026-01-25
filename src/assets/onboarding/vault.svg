@@ -1,0 +1,49 @@
+<svg width="200" height="150" viewBox="0 0 200 150" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="folderGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+    <linearGradient id="docGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#e2e8f0"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Folder back -->
+  <path d="M35 50 L35 115 C35 118.3 37.7 121 41 121 L159 121 C162.3 121 165 118.3 165 115 L165 55 C165 51.7 162.3 49 159 49 L95 49 L85 38 C83.5 36.5 81.5 35.5 79 35.5 L41 35.5 C37.7 35.5 35 38.2 35 41.5 L35 50 Z" fill="url(#folderGradient)" opacity="0.3"/>
+  
+  <!-- Documents floating -->
+  <!-- Doc 1 (back) -->
+  <g transform="translate(70, 45) rotate(-5)">
+    <rect width="40" height="50" rx="3" fill="url(#docGradient)" stroke="#cbd5e1" stroke-width="1"/>
+    <rect x="6" y="10" width="20" height="2" rx="1" fill="#cbd5e1"/>
+    <rect x="6" y="16" width="28" height="2" rx="1" fill="#cbd5e1"/>
+    <rect x="6" y="22" width="24" height="2" rx="1" fill="#cbd5e1"/>
+    <rect x="6" y="28" width="26" height="2" rx="1" fill="#cbd5e1"/>
+  </g>
+  
+  <!-- Doc 2 (middle) -->
+  <g transform="translate(90, 40) rotate(3)">
+    <rect width="40" height="50" rx="3" fill="url(#docGradient)" stroke="#cbd5e1" stroke-width="1"/>
+    <rect x="6" y="10" width="22" height="2" rx="1" fill="#cbd5e1"/>
+    <rect x="6" y="16" width="28" height="2" rx="1" fill="#cbd5e1"/>
+    <rect x="6" y="22" width="18" height="2" rx="1" fill="#cbd5e1"/>
+    <rect x="6" y="28" width="25" height="2" rx="1" fill="#cbd5e1"/>
+  </g>
+  
+  <!-- Doc 3 (front) -->
+  <g transform="translate(110, 35) rotate(-2)">
+    <rect width="40" height="50" rx="3" fill="url(#docGradient)" stroke="#cbd5e1" stroke-width="1"/>
+    <rect x="6" y="10" width="24" height="2" rx="1" fill="#8b5cf6" opacity="0.5"/>
+    <rect x="6" y="16" width="28" height="2" rx="1" fill="#cbd5e1"/>
+    <rect x="6" y="22" width="20" height="2" rx="1" fill="#cbd5e1"/>
+    <rect x="6" y="28" width="26" height="2" rx="1" fill="#cbd5e1"/>
+  </g>
+  
+  <!-- Folder front -->
+  <path d="M30 55 L30 120 C30 123.3 32.7 126 36 126 L164 126 C167.3 126 170 123.3 170 120 L170 60 C170 56.7 167.3 54 164 54 L30 54 Z" fill="url(#folderGradient)"/>
+  
+  <!-- Folder highlight -->
+  <path d="M30 60 L170 60" stroke="white" stroke-width="1" opacity="0.3"/>
+</svg>

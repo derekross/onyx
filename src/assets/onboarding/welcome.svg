@@ -1,0 +1,69 @@
+<svg width="200" height="150" viewBox="0 0 200 150" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="rockShine" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3a3a3a"/>
+      <stop offset="30%" stop-color="#1a1a1a"/>
+      <stop offset="70%" stop-color="#0a0a0a"/>
+      <stop offset="100%" stop-color="#000000"/>
+    </linearGradient>
+    <linearGradient id="highlight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4a4a4a"/>
+      <stop offset="100%" stop-color="#2a2a2a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.4"/>
+      <stop offset="70%" stop-color="#8b5cf6" stop-opacity="0.1"/>
+      <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  
+  <!-- Background glow -->
+  <circle cx="100" cy="75" r="65" fill="url(#glow)"/>
+  
+  <!-- Onyx rock logo - scaled and centered -->
+  <g transform="translate(55, 30) scale(0.18)">
+    <!-- Back facets (darker) -->
+    <polygon points="256,48 380,140 420,280 350,420 162,420 92,280 132,140" fill="#0a0a0a"/>
+    
+    <!-- Left side facet -->
+    <polygon points="132,140 92,280 162,420 200,320 180,200" fill="#151515"/>
+    
+    <!-- Right side facet -->
+    <polygon points="380,140 420,280 350,420 312,320 332,200" fill="#101010"/>
+    
+    <!-- Bottom facet -->
+    <polygon points="162,420 350,420 312,320 256,360 200,320" fill="#080808"/>
+    
+    <!-- Top left facet -->
+    <polygon points="256,48 132,140 180,200 256,160" fill="url(#highlight)"/>
+    
+    <!-- Top right facet -->
+    <polygon points="256,48 380,140 332,200 256,160" fill="#2a2a2a"/>
+    
+    <!-- Center top facet (table) - main highlight -->
+    <polygon points="180,200 332,200 312,320 256,360 200,320" fill="url(#rockShine)"/>
+    
+    <!-- Shine/reflection on top -->
+    <polygon points="200,210 280,210 260,260 210,250" fill="#4a4a4a" opacity="0.3"/>
+    
+    <!-- Small highlight -->
+    <polygon points="210,220 250,220 240,245 215,240" fill="#5a5a5a" opacity="0.2"/>
+    
+    <!-- Subtle outer glow for depth -->
+    <polygon points="256,48 380,140 420,280 350,420 162,420 92,280 132,140" 
+             fill="none" 
+             stroke="#8b5cf6" 
+             stroke-width="3"
+             opacity="0.5"/>
+  </g>
+  
+  <!-- Decorative sparkles around the logo -->
+  <path d="M155 35 L157 40 L162 42 L157 44 L155 49 L153 44 L148 42 L153 40 Z" fill="#8b5cf6" opacity="0.7"/>
+  <path d="M45 65 L46.5 69 L50.5 70.5 L46.5 72 L45 76 L43.5 72 L39.5 70.5 L43.5 69 Z" fill="#8b5cf6" opacity="0.6"/>
+  <path d="M160 95 L161 98 L164 99 L161 100 L160 103 L159 100 L156 99 L159 98 Z" fill="#8b5cf6" opacity="0.5"/>
+  <path d="M40 105 L41 108 L44 109 L41 110 L40 113 L39 110 L36 109 L39 108 Z" fill="#8b5cf6" opacity="0.5"/>
+  
+  <!-- Subtle accent rings -->
+  <circle cx="100" cy="75" r="55" stroke="#8b5cf6" stroke-width="1" fill="none" opacity="0.2"/>
+  <circle cx="100" cy="75" r="62" stroke="#8b5cf6" stroke-width="0.5" fill="none" opacity="0.1"/>
+</svg>

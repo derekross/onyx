@@ -1,0 +1,76 @@
+<svg width="200" height="150" viewBox="0 0 200 150" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="skillGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+    <linearGradient id="pieceGradient1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22c55e"/>
+      <stop offset="100%" stop-color="#16a34a"/>
+    </linearGradient>
+    <linearGradient id="pieceGradient2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="pieceGradient3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Central puzzle piece (purple - main) -->
+  <g transform="translate(85, 55)">
+    <path d="M0 10 L0 0 L10 0 C10 -5 20 -5 20 0 L30 0 L30 10 C35 10 35 20 30 20 L30 30 L20 30 C20 35 10 35 10 30 L0 30 L0 20 C-5 20 -5 10 0 10 Z" fill="url(#skillGradient)"/>
+  </g>
+  
+  <!-- Left puzzle piece (green) -->
+  <g transform="translate(50, 55)">
+    <path d="M0 10 L0 0 L10 0 C10 -5 20 -5 20 0 L30 0 L30 10 C35 10 35 20 30 20 L30 30 L20 30 C20 35 10 35 10 30 L0 30 L0 20 C-5 20 -5 10 0 10 Z" fill="url(#pieceGradient1)" opacity="0.9"/>
+  </g>
+  
+  <!-- Right puzzle piece (orange) -->
+  <g transform="translate(120, 55)">
+    <path d="M0 10 L0 0 L10 0 C10 -5 20 -5 20 0 L30 0 L30 10 C35 10 35 20 30 20 L30 30 L20 30 C20 35 10 35 10 30 L0 30 L0 20 C-5 20 -5 10 0 10 Z" fill="url(#pieceGradient2)" opacity="0.9"/>
+  </g>
+  
+  <!-- Top puzzle piece (blue) -->
+  <g transform="translate(85, 20)">
+    <path d="M0 10 L0 0 L10 0 C10 -5 20 -5 20 0 L30 0 L30 10 C35 10 35 20 30 20 L30 30 L20 30 C20 35 10 35 10 30 L0 30 L0 20 C-5 20 -5 10 0 10 Z" fill="url(#pieceGradient3)" opacity="0.9"/>
+  </g>
+  
+  <!-- Bottom puzzle piece (purple lighter) -->
+  <g transform="translate(85, 90)">
+    <path d="M0 10 L0 0 L10 0 C10 -5 20 -5 20 0 L30 0 L30 10 C35 10 35 20 30 20 L30 30 L20 30 C20 35 10 35 10 30 L0 30 L0 20 C-5 20 -5 10 0 10 Z" fill="url(#skillGradient)" opacity="0.7"/>
+  </g>
+  
+  <!-- Floating skill icons -->
+  <!-- Document icon -->
+  <g transform="translate(25, 30)">
+    <rect x="0" y="0" width="20" height="25" rx="2" fill="#374151" stroke="#4b5563" stroke-width="1"/>
+    <rect x="4" y="5" width="10" height="2" fill="#8b5cf6" opacity="0.6"/>
+    <rect x="4" y="10" width="12" height="1.5" fill="#6b7280"/>
+    <rect x="4" y="14" width="8" height="1.5" fill="#6b7280"/>
+  </g>
+  
+  <!-- Spreadsheet icon -->
+  <g transform="translate(160, 35)">
+    <rect x="0" y="0" width="22" height="20" rx="2" fill="#374151" stroke="#4b5563" stroke-width="1"/>
+    <line x1="8" y1="0" x2="8" y2="20" stroke="#4b5563" stroke-width="1"/>
+    <line x1="15" y1="0" x2="15" y2="20" stroke="#4b5563" stroke-width="1"/>
+    <line x1="0" y1="7" x2="22" y2="7" stroke="#4b5563" stroke-width="1"/>
+    <line x1="0" y1="13" x2="22" y2="13" stroke="#4b5563" stroke-width="1"/>
+    <rect x="2" y="2" width="4" height="3" fill="#22c55e" opacity="0.6"/>
+  </g>
+  
+  <!-- Presentation icon -->
+  <g transform="translate(30, 100)">
+    <rect x="0" y="5" width="25" height="18" rx="2" fill="#374151" stroke="#4b5563" stroke-width="1"/>
+    <rect x="10" y="0" width="5" height="5" fill="#374151"/>
+    <rect x="4" y="9" width="12" height="3" fill="#f59e0b" opacity="0.6"/>
+    <rect x="4" y="15" width="17" height="2" fill="#6b7280"/>
+  </g>
+  
+  <!-- Sparkles -->
+  <path d="M170 100 L172 105 L177 107 L172 109 L170 114 L168 109 L163 107 L168 105 Z" fill="#8b5cf6" opacity="0.6"/>
+  <path d="M45 70 L46 73 L49 74 L46 75 L45 78 L44 75 L41 74 L44 73 Z" fill="#8b5cf6" opacity="0.5"/>
+</svg>

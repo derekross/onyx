@@ -15,6 +15,7 @@ import SharedDocPreview from './components/SharedDocPreview';
 import SentSharesPanel from './components/SentSharesPanel';
 import FileInfoDialog from './components/FileInfoDialog';
 import PostToNostrDialog from './components/PostToNostrDialog';
+import Onboarding, { type OnboardingResult } from './components/Onboarding';
 import { MobileHeader, MobileNav, MobileDrawer, type MobileNavTab } from './components/mobile';
 import { initPlatform, usePlatformInfo } from './lib/platform';
 import { impactLight, impactMedium, notificationSuccess, notificationError } from './lib/haptics';
@@ -154,6 +155,9 @@ const App: Component = () => {
   // File Info and Post to Nostr dialogs
   const [showFileInfo, setShowFileInfo] = createSignal<string | null>(null);
   const [postToNostrTarget, setPostToNostrTarget] = createSignal<{ path: string; content: string; title: string } | null>(null);
+
+  // Onboarding state
+  const [showOnboarding, setShowOnboarding] = createSignal(false);
 
   // Mobile state
   const platformInfo = usePlatformInfo();
@@ -348,10 +352,23 @@ const App: Component = () => {
       // Mark settings as loaded - now the save effect can run
       console.log('[App] Settings load complete, enabling save effect');
       setSettingsLoaded(true);
+      
+      // Check if this is first run - show onboarding if not completed
+      const onboardingCompleted = localStorage.getItem('onboarding_completed') === 'true';
+      if (!onboardingCompleted) {
+        console.log('[App] First run detected, showing onboarding');
+        setShowOnboarding(true);
+      }
     }).catch(err => {
       console.error('Failed to load settings:', err);
       // Still mark as loaded so app can function
       setSettingsLoaded(true);
+      
+      // Still check for onboarding even if settings failed to load
+      const onboardingCompleted = localStorage.getItem('onboarding_completed') === 'true';
+      if (!onboardingCompleted) {
+        setShowOnboarding(true);
+      }
     });
 
     // Initialize sync status from localStorage
@@ -429,7 +446,67 @@ const App: Component = () => {
     sharePollingInterval = window.setInterval(() => {
       fetchSharedDocuments();
     }, 5 * 60 * 1000);
+    
+    // Listen for re-triggering onboarding from Settings
+    const handleShowOnboarding = () => {
+      setShowOnboarding(true);
+    };
+    window.addEventListener('show-onboarding', handleShowOnboarding);
+    
+    onCleanup(() => {
+      window.removeEventListener('show-onboarding', handleShowOnboarding);
+    });
   });
+
+  // Handle onboarding completion
+  const handleOnboardingComplete = async (result: OnboardingResult) => {
+    console.log('[App] Onboarding complete:', result);
+    
+    // Mark onboarding as completed
+    localStorage.setItem('onboarding_completed', 'true');
+    
+    // Set the vault path from onboarding
+    if (result.vaultPath) {
+      setVaultPath(result.vaultPath);
+      localStorage.setItem('vault_path', result.vaultPath);
+      
+      // Build note index for the new vault
+      try {
+        const files = await invoke<FileEntry[]>('list_files', { path: result.vaultPath });
+        setNoteIndex(buildNoteIndex(files, result.vaultPath));
+      } catch (err) {
+        console.error('Failed to build note index after onboarding:', err);
+      }
+      
+      // Build asset index
+      try {
+        const assets = await invoke<AssetEntry[]>('list_assets', { path: result.vaultPath });
+        setAssetIndex(buildAssetIndex(assets, result.vaultPath));
+      } catch (err) {
+        console.error('Failed to build asset index after onboarding:', err);
+      }
+    }
+    
+    // Apply sync settings if enabled during onboarding
+    if (result.syncEnabled) {
+      setSyncStatus('idle');
+    }
+    
+    // Hide onboarding
+    setShowOnboarding(false);
+    
+    // Create first note if requested
+    if (result.createFirstNote) {
+      setTimeout(() => {
+        createNewNote();
+      }, 100);
+    }
+    
+    // Refresh shared documents if Nostr was set up
+    if (result.nostrSetup !== 'skipped') {
+      fetchSharedDocuments();
+    }
+  };
 
   // Fetch shared documents from relays
   const fetchSharedDocuments = async () => {
@@ -2061,6 +2138,15 @@ const App: Component = () => {
       </main>
 
       {/* Modals */}
+      
+      {/* Onboarding Wizard - shown on first run */}
+      <Show when={showOnboarding()}>
+        <Onboarding
+          isMobile={isMobileApp()}
+          onComplete={handleOnboardingComplete}
+        />
+      </Show>
+
       <Show when={showQuickSwitcher()}>
         <QuickSwitcher
           vaultPath={vaultPath()}

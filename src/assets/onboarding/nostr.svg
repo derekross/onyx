@@ -1,0 +1,54 @@
+<svg width="200" height="150" viewBox="0 0 200 150" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="nostrGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+    <radialGradient id="nodeGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  
+  <!-- Connection lines -->
+  <line x1="100" y1="75" x2="50" y2="45" stroke="#8b5cf6" stroke-width="2" opacity="0.4"/>
+  <line x1="100" y1="75" x2="150" y2="45" stroke="#8b5cf6" stroke-width="2" opacity="0.4"/>
+  <line x1="100" y1="75" x2="45" y2="95" stroke="#8b5cf6" stroke-width="2" opacity="0.4"/>
+  <line x1="100" y1="75" x2="155" y2="95" stroke="#8b5cf6" stroke-width="2" opacity="0.4"/>
+  <line x1="100" y1="75" x2="70" y2="120" stroke="#8b5cf6" stroke-width="2" opacity="0.4"/>
+  <line x1="100" y1="75" x2="130" y2="120" stroke="#8b5cf6" stroke-width="2" opacity="0.4"/>
+  
+  <!-- Secondary connections -->
+  <line x1="50" y1="45" x2="45" y2="95" stroke="#8b5cf6" stroke-width="1" opacity="0.2"/>
+  <line x1="150" y1="45" x2="155" y2="95" stroke="#8b5cf6" stroke-width="1" opacity="0.2"/>
+  <line x1="45" y1="95" x2="70" y2="120" stroke="#8b5cf6" stroke-width="1" opacity="0.2"/>
+  <line x1="155" y1="95" x2="130" y2="120" stroke="#8b5cf6" stroke-width="1" opacity="0.2"/>
+  
+  <!-- Outer nodes -->
+  <circle cx="50" cy="45" r="12" fill="#2d2d3d" stroke="#8b5cf6" stroke-width="2"/>
+  <circle cx="150" cy="45" r="12" fill="#2d2d3d" stroke="#8b5cf6" stroke-width="2"/>
+  <circle cx="45" cy="95" r="10" fill="#2d2d3d" stroke="#8b5cf6" stroke-width="2"/>
+  <circle cx="155" cy="95" r="10" fill="#2d2d3d" stroke="#8b5cf6" stroke-width="2"/>
+  <circle cx="70" cy="120" r="8" fill="#2d2d3d" stroke="#8b5cf6" stroke-width="2"/>
+  <circle cx="130" cy="120" r="8" fill="#2d2d3d" stroke="#8b5cf6" stroke-width="2"/>
+  
+  <!-- Center glow -->
+  <circle cx="100" cy="75" r="30" fill="url(#nodeGlow)"/>
+  
+  <!-- Center node (user) -->
+  <circle cx="100" cy="75" r="22" fill="url(#nostrGradient)"/>
+  
+  <!-- Key icon in center -->
+  <g transform="translate(100, 75)">
+    <circle cx="0" cy="-5" r="6" stroke="white" stroke-width="2" fill="none"/>
+    <rect x="-1.5" y="1" width="3" height="12" rx="1" fill="white"/>
+    <rect x="1.5" y="7" width="5" height="2" rx="1" fill="white"/>
+    <rect x="1.5" y="11" width="3" height="2" rx="1" fill="white"/>
+  </g>
+  
+  <!-- Small node icons -->
+  <circle cx="50" cy="45" r="4" fill="#8b5cf6" opacity="0.5"/>
+  <circle cx="150" cy="45" r="4" fill="#8b5cf6" opacity="0.5"/>
+  <circle cx="45" cy="95" r="3" fill="#8b5cf6" opacity="0.5"/>
+  <circle cx="155" cy="95" r="3" fill="#8b5cf6" opacity="0.5"/>
+</svg>

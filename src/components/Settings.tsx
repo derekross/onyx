@@ -1573,6 +1573,26 @@ const Settings: Component<SettingsProps> = (props) => {
                   </div>
                   <input type="number" class="setting-input" value="2" min="1" max="60" />
                 </div>
+
+                <div class="settings-divider" />
+
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">Welcome Tour</div>
+                    <div class="setting-description">Show the welcome tour again to learn about Onyx features</div>
+                  </div>
+                  <button 
+                    class="setting-button secondary"
+                    onClick={() => {
+                      localStorage.removeItem('onboarding_completed');
+                      props.onClose();
+                      // Trigger onboarding show via custom event
+                      window.dispatchEvent(new CustomEvent('show-onboarding'));
+                    }}
+                  >
+                    Show Welcome Tour
+                  </button>
+                </div>
               </div>
             </Show>
 
