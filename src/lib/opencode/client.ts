@@ -619,3 +619,208 @@ export function clearProvidersCache(): void {
   providersCache = null;
   providersCacheTime = 0;
 }
+
+/**
+ * Provider auth info for UI display
+ */
+export interface ProviderAuthInfo {
+  id: string;
+  name: string;
+  authMethods: Array<{ type: 'oauth' | 'api'; label: string }>;
+  isConnected: boolean;
+  env: string[];
+}
+
+/**
+ * Get provider authentication methods
+ * Returns available auth methods for each provider
+ * Note: This endpoint may not be available in all OpenCode versions
+ */
+export async function getProviderAuthMethods(timeoutMs: number = 5000): Promise<Record<string, Array<{ type: 'oauth' | 'api'; label: string }>>> {
+  if (!client) {
+    initClient();
+  }
+  
+  try {
+    const response = await withTimeout(client!.provider.auth(), timeoutMs);
+    // Check if response contains an error
+    if (response.data && typeof response.data === 'object' && 'name' in response.data && (response.data as { name?: string }).name === 'APIError') {
+      console.log('Provider auth endpoint returned error, falling back to env-based detection');
+      return {};
+    }
+    return (response.data || {}) as Record<string, Array<{ type: 'oauth' | 'api'; label: string }>>;
+  } catch (err) {
+    // This is expected if the endpoint doesn't exist in older versions
+    console.log('Provider auth endpoint not available:', err);
+    return {};
+  }
+}
+
+/**
+ * Get list of all providers with their auth status
+ */
+export async function getAllProvidersWithAuthStatus(timeoutMs: number = 5000): Promise<ProviderAuthInfo[]> {
+  if (!client) {
+    initClient();
+  }
+  
+  try {
+    // Get providers list first
+    const providersResponse = await withTimeout(client!.provider.list(), timeoutMs);
+    
+    const data = providersResponse.data as {
+      all?: Array<{
+        id: string;
+        name: string;
+        env: string[];
+        models?: Record<string, unknown>;
+      }>;
+      connected?: string[];
+    } | undefined;
+    
+    if (!data?.all) {
+      return [];
+    }
+    
+    // Try to get auth methods, but don't fail if endpoint doesn't exist
+    let authMethods: Record<string, Array<{ type: 'oauth' | 'api'; label: string }>> = {};
+    try {
+      authMethods = await getProviderAuthMethods(timeoutMs);
+    } catch {
+      // Ignore - we'll fall back to env-based detection
+    }
+    
+    const connected = new Set(data.connected || []);
+    
+    return data.all
+      // Show providers that have env vars (API key support) OR have auth methods from the endpoint
+      .filter(p => (p.env && p.env.length > 0) || authMethods[p.id]?.length > 0)
+      .map(p => {
+        // Build auth methods: use endpoint data if available, otherwise create API method from env vars
+        let methods = authMethods[p.id] || [];
+        
+        // If no methods from endpoint but has env vars, add API key method
+        if (methods.length === 0 && p.env && p.env.length > 0) {
+          methods = [{ type: 'api' as const, label: 'API Key' }];
+        }
+        
+        return {
+          id: p.id,
+          name: p.name || p.id,
+          authMethods: methods,
+          isConnected: connected.has(p.id),
+          env: p.env || [],
+        };
+      })
+      .sort((a, b) => {
+        // Sort connected providers first, then by name
+        if (a.isConnected !== b.isConnected) {
+          return a.isConnected ? -1 : 1;
+        }
+        return a.name.localeCompare(b.name);
+      });
+  } catch (err) {
+    console.error('Failed to get providers with auth status:', err);
+    return [];
+  }
+}
+
+/**
+ * Set an API key for a provider
+ */
+export async function setProviderApiKey(providerId: string, apiKey: string): Promise<boolean> {
+  if (!client) {
+    initClient();
+  }
+  
+  try {
+    const response = await client!.auth.set({
+      path: { id: providerId },
+      body: { type: 'api', key: apiKey },
+    });
+    
+    // Clear the providers cache after setting a new key
+    clearProvidersCache();
+    
+    return response.data === true;
+  } catch (err) {
+    console.error('Failed to set provider API key:', err);
+    throw err;
+  }
+}
+
+/**
+ * Remove/clear API key for a provider (set empty key)
+ * Note: OpenCode doesn't have a dedicated remove endpoint, so we set an empty key
+ * or use OAuth removal if it's an OAuth provider
+ */
+export async function removeProviderAuth(providerId: string): Promise<boolean> {
+  if (!client) {
+    initClient();
+  }
+  
+  try {
+    // Setting an empty API key effectively removes the credential
+    const response = await client!.auth.set({
+      path: { id: providerId },
+      body: { type: 'api', key: '' },
+    });
+    
+    // Clear the providers cache after removing
+    clearProvidersCache();
+    
+    return response.data === true;
+  } catch (err) {
+    console.error('Failed to remove provider auth:', err);
+    throw err;
+  }
+}
+
+/**
+ * Start OAuth flow for a provider
+ * Returns the authorization URL to open in browser
+ */
+export async function startProviderOAuth(providerId: string, methodIndex: number = 0): Promise<{ url: string; method: 'auto' | 'code'; instructions: string } | null> {
+  if (!client) {
+    initClient();
+  }
+  
+  try {
+    const response = await client!.provider.oauth.authorize({
+      path: { id: providerId },
+      body: { method: methodIndex },
+    });
+    
+    if (response.data) {
+      return response.data as { url: string; method: 'auto' | 'code'; instructions: string };
+    }
+    return null;
+  } catch (err) {
+    console.error('Failed to start OAuth flow:', err);
+    throw err;
+  }
+}
+
+/**
+ * Complete OAuth flow with authorization code
+ */
+export async function completeProviderOAuth(providerId: string, code: string, methodIndex: number = 0): Promise<boolean> {
+  if (!client) {
+    initClient();
+  }
+  
+  try {
+    const response = await client!.provider.oauth.callback({
+      path: { id: providerId },
+      body: { method: methodIndex, code },
+    });
+    
+    // Clear the providers cache after completing OAuth
+    clearProvidersCache();
+    
+    return response.data === true;
+  } catch (err) {
+    console.error('Failed to complete OAuth flow:', err);
+    throw err;
+  }
+}
