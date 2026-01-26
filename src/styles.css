@@ -1630,11 +1630,6 @@ body {
 
 .opencode-terminal-container .xterm {
   height: 100%;
-  font-family: 'Menlo', 'Monaco', 'Consolas', 'Cascadia Mono', 'Lucida Console', 'Courier New', monospace !important;
-}
-
-.opencode-terminal-container .xterm-rows {
-  font-family: 'Menlo', 'Monaco', 'Consolas', 'Cascadia Mono', 'Lucida Console', 'Courier New', monospace !important;
 }
 
 .opencode-terminal-container .xterm-viewport {

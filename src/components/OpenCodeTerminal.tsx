@@ -1,11 +1,10 @@
 import { Component, createSignal, onMount, onCleanup, Show } from 'solid-js';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { CanvasAddon } from '@xterm/addon-canvas';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-shell';
-
-import '@xterm/xterm/css/xterm.css';
 
 interface OpenCodeTerminalProps {
   vaultPath: string | null;
@@ -29,7 +28,7 @@ const OpenCodeTerminal: Component<OpenCodeTerminalProps> = (props) => {
     terminal = new Terminal({
       cursorBlink: true,
       fontSize: 14,
-      fontFamily: 'Menlo, Monaco, Consolas, "Cascadia Mono", "Lucida Console", "Courier New", monospace',
+      fontFamily: 'monospace',
       theme: {
         background: '#1e1e1e',
         foreground: '#cccccc',
@@ -58,6 +57,11 @@ const OpenCodeTerminal: Component<OpenCodeTerminalProps> = (props) => {
     fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.open(terminalRef);
+    
+    // Load canvas addon for proper rendering in WebKitGTK
+    const canvasAddon = new CanvasAddon();
+    terminal.loadAddon(canvasAddon);
+    
     fitAddon.fit();
 
     // Handle terminal input
@@ -172,7 +176,13 @@ const OpenCodeTerminal: Component<OpenCodeTerminalProps> = (props) => {
   };
 
   onMount(() => {
-    initTerminal();
+    // Small delay to ensure container is properly sized before xterm initializes
+    // This is important for production builds where timing can differ
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        initTerminal();
+      });
+    });
   });
 
   onCleanup(async () => {
