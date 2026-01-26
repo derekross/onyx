@@ -9,6 +9,7 @@ import Settings from './components/Settings';
 import GraphView from './components/GraphView';
 import OutlinePanel from './components/OutlinePanel';
 import BacklinksPanel from './components/BacklinksPanel';
+import PropertiesPanel from './components/PropertiesPanel';
 import ShareDialog from './components/ShareDialog';
 import NotificationsPanel from './components/NotificationsPanel';
 import SharedDocPreview from './components/SharedDocPreview';
@@ -100,7 +101,7 @@ const App: Component = () => {
   const [scrollToLine, setScrollToLine] = createSignal<number | null>(null);
   const [noteIndex, setNoteIndex] = createSignal<NoteIndex | null>(null);
   const [assetIndex, setAssetIndex] = createSignal<AssetIndex | null>(null);
-  const [isResizing, setIsResizing] = createSignal<'sidebar' | 'terminal' | 'outline' | 'backlinks' | null>(null);
+  const [isResizing, setIsResizing] = createSignal<'sidebar' | 'terminal' | 'outline' | 'backlinks' | 'properties' | 'notifications' | null>(null);
   
   // Queue for deep links received before vault is loaded
   // Stores both the URL and clipboard content (since clipboard may change)
@@ -112,6 +113,19 @@ const App: Component = () => {
   );
   const [backlinksWidth, setBacklinksWidth] = createSignal(
     parseInt(localStorage.getItem('backlinks_width') || '250')
+  );
+
+  // Properties panel state
+  const [showProperties, setShowProperties] = createSignal(
+    localStorage.getItem('show_properties') === 'true'
+  );
+  const [propertiesWidth, setPropertiesWidth] = createSignal(
+    parseInt(localStorage.getItem('properties_width') || '280')
+  );
+
+  // Notifications panel state (width only - show state already exists)
+  const [notificationsWidth, setNotificationsWidth] = createSignal(
+    parseInt(localStorage.getItem('notifications_width') || '320')
   );
 
   // Note graph and file contents for backlinks
@@ -779,7 +793,7 @@ const App: Component = () => {
     ));
     
     setPreviewingDoc(doc);
-    setShowNotifications(false);
+    // Keep notifications panel open - user can close it manually
   };
 
   // Handle importing a shared document
@@ -955,6 +969,19 @@ const App: Component = () => {
   });
   createEffect(() => {
     localStorage.setItem('backlinks_width', backlinksWidth().toString());
+  });
+
+  // Persist properties panel state
+  createEffect(() => {
+    localStorage.setItem('show_properties', showProperties().toString());
+  });
+  createEffect(() => {
+    localStorage.setItem('properties_width', propertiesWidth().toString());
+  });
+
+  // Persist notifications panel width
+  createEffect(() => {
+    localStorage.setItem('notifications_width', notificationsWidth().toString());
   });
 
   // Persist session state (tabs, sidebar state, expanded folders)
@@ -1171,6 +1198,9 @@ const App: Component = () => {
       } else if (isMod && e.shiftKey && e.key === 'B') {
         e.preventDefault();
         setShowBacklinks(!showBacklinks());
+      } else if (isMod && e.shiftKey && e.key === 'P') {
+        e.preventDefault();
+        setShowProperties(!showProperties());
       } else if (isMod && e.key === 'd') {
         e.preventDefault();
         handleOpenDailyNote();
@@ -1868,6 +1898,7 @@ const App: Component = () => {
     { id: 'toggle-terminal', name: 'Toggle Terminal', shortcut: 'Ctrl+`', action: () => setShowTerminal(!showTerminal()) },
     { id: 'toggle-outline', name: 'Toggle Outline', shortcut: 'Ctrl+Shift+O', action: () => setShowOutline(!showOutline()) },
     { id: 'toggle-backlinks', name: 'Toggle Backlinks', shortcut: 'Ctrl+Shift+B', action: () => setShowBacklinks(!showBacklinks()) },
+    { id: 'toggle-properties', name: 'Toggle Properties', shortcut: 'Ctrl+Shift+P', action: () => setShowProperties(!showProperties()) },
     { id: 'close-tab', name: 'Close Tab', action: () => activeTabIndex() >= 0 && closeTab(activeTabIndex()) },
     { id: 'daily-note', name: 'Open Daily Note', shortcut: 'Ctrl+D', action: handleOpenDailyNote },
     { id: 'templates', name: 'Insert Template', shortcut: 'Ctrl+T', action: handleOpenTemplatesPicker },
@@ -1910,6 +1941,24 @@ const App: Component = () => {
     document.body.style.userSelect = 'none';
   };
 
+  const handlePropertiesResizeStart = (e: MouseEvent) => {
+    e.preventDefault();
+    setIsResizing('properties');
+    setResizeStartX(e.clientX);
+    setResizeStartWidth(propertiesWidth());
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
+  const handleNotificationsResizeStart = (e: MouseEvent) => {
+    e.preventDefault();
+    setIsResizing('notifications');
+    setResizeStartX(e.clientX);
+    setResizeStartWidth(notificationsWidth());
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
   const handleResizeMove = (e: MouseEvent) => {
     const target = isResizing();
     if (!target) return;
@@ -1934,6 +1983,16 @@ const App: Component = () => {
       const delta = resizeStartX() - e.clientX;
       const newWidth = resizeStartWidth() + delta;
       setBacklinksWidth(Math.max(180, Math.min(400, newWidth)));
+    } else if (target === 'properties') {
+      // Properties: dragging left = wider panel (same as terminal)
+      const delta = resizeStartX() - e.clientX;
+      const newWidth = resizeStartWidth() + delta;
+      setPropertiesWidth(Math.max(200, Math.min(400, newWidth)));
+    } else if (target === 'notifications') {
+      // Notifications: dragging left = wider panel (same as terminal)
+      const delta = resizeStartX() - e.clientX;
+      const newWidth = resizeStartWidth() + delta;
+      setNotificationsWidth(Math.max(280, Math.min(450, newWidth)));
     }
   };
 
@@ -2141,6 +2200,16 @@ const App: Component = () => {
             <path d="M9 17H7A5 5 0 0 1 7 7h2"></path>
             <path d="M15 7h2a5 5 0 1 1 0 10h-2"></path>
             <line x1="8" y1="12" x2="16" y2="12"></line>
+          </svg>
+        </button>
+        <button
+          class={`icon-btn ${showProperties() ? 'active' : ''}`}
+          onClick={() => setShowProperties(!showProperties())}
+          title="Properties (Ctrl+Shift+P)"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
           </svg>
         </button>
         <button
@@ -2376,6 +2445,48 @@ const App: Component = () => {
                     console.error('Failed to refresh after linking:', err);
                   }
                 }}
+              />
+            </div>
+          </Show>
+
+          {/* Properties Panel - Right Side */}
+          <Show when={showProperties() && currentTab()}>
+            <div
+              class="resize-handle"
+              onMouseDown={handlePropertiesResizeStart}
+            />
+            <div class="properties-panel-container" style={{ width: `${propertiesWidth()}px` }}>
+              <PropertiesPanel
+                content={currentTab()?.content || null}
+                onUpdateContent={(newContent) => {
+                  const idx = activeTabIndex();
+                  if (idx >= 0) {
+                    setTabs(tabs().map((t, i) => i === idx ? { ...t, content: newContent, isDirty: true } : t));
+                    // Trigger auto-save
+                    if (autoSaveTimeout) clearTimeout(autoSaveTimeout);
+                    autoSaveTimeout = window.setTimeout(() => {
+                      saveTab(idx);
+                    }, 2000);
+                  }
+                }}
+                onClose={() => setShowProperties(false)}
+              />
+            </div>
+          </Show>
+
+          {/* Notifications Panel - Right Side */}
+          <Show when={showNotifications()}>
+            <div
+              class="resize-handle"
+              onMouseDown={handleNotificationsResizeStart}
+            />
+            <div class="notifications-panel-container" style={{ width: `${notificationsWidth()}px` }}>
+              <NotificationsPanel
+                sharedDocuments={sharedWithMe()}
+                isLoading={isLoadingShares()}
+                onPreview={handlePreviewSharedDoc}
+                onRefresh={fetchSharedDocuments}
+                onClose={() => setShowNotifications(false)}
               />
             </div>
           </Show>
@@ -2628,17 +2739,6 @@ const App: Component = () => {
           onSuccess={() => {
             fetchSharedDocuments();
           }}
-        />
-      </Show>
-
-      {/* Notifications Panel (Shared with me) */}
-      <Show when={showNotifications()}>
-        <NotificationsPanel
-          sharedDocuments={sharedWithMe()}
-          isLoading={isLoadingShares()}
-          onPreview={handlePreviewSharedDoc}
-          onRefresh={fetchSharedDocuments}
-          onClose={() => setShowNotifications(false)}
         />
       </Show>
 
