@@ -653,16 +653,26 @@ const App: Component = () => {
       return;
     }
     
-    let requestData: { prompt?: string; context?: string } = {};
+    let requestData: { prompt?: string; context?: string; callbackId?: string } = {};
     
     if (useClipboard) {
       try {
         const clipboardText = await readText();
+        console.log('[DeepLink] Clipboard text length:', clipboardText?.length || 0);
+        console.log('[DeepLink] Clipboard preview:', clipboardText?.substring(0, 200));
         if (clipboardText) {
           requestData = JSON.parse(clipboardText);
+          console.log('[DeepLink] Parsed request data:', { 
+            hasPrompt: !!requestData.prompt, 
+            promptLength: requestData.prompt?.length,
+            hasContext: !!requestData.context,
+            callbackId: requestData.callbackId 
+          });
         }
       } catch (err) {
         console.error('[DeepLink] Failed to parse clipboard data:', err);
+        await writeAiResponse(callbackId, '', 'Failed to parse AI request from clipboard');
+        return;
       }
     }
     
