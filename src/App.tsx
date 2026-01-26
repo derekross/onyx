@@ -28,6 +28,8 @@ import { readText } from '@tauri-apps/plugin-clipboard-manager';
 import { getSyncEngine, getCurrentLogin } from './lib/nostr';
 import { getSignerFromStoredLogin } from './lib/nostr/signer';
 import { buildNoteIndex, resolveWikilink, NoteIndex, FileEntry, NoteGraph, buildNoteGraph } from './lib/editor/note-index';
+import { openDailyNote, loadDailyNotesConfig } from './lib/daily-notes';
+import { listTemplates, getTemplateContent, createNoteFromTemplate, loadTemplatesConfig, type TemplateInfo } from './lib/templates';
 import { HeadingInfo } from './lib/editor/heading-plugin';
 import { AssetIndex, AssetEntry, buildAssetIndex } from './lib/editor/asset-index';
 import type { SharedDocument, SentShare, Vault } from './lib/nostr/types';
@@ -164,6 +166,11 @@ const App: Component = () => {
 
   // Onboarding state
   const [showOnboarding, setShowOnboarding] = createSignal(false);
+
+  // Templates modal state
+  const [showTemplatesModal, setShowTemplatesModal] = createSignal(false);
+  const [availableTemplates, setAvailableTemplates] = createSignal<TemplateInfo[]>([]);
+  const [templatesLoading, setTemplatesLoading] = createSignal(false);
 
   // Mobile state
   const platformInfo = usePlatformInfo();
@@ -1164,10 +1171,17 @@ const App: Component = () => {
       } else if (isMod && e.shiftKey && e.key === 'B') {
         e.preventDefault();
         setShowBacklinks(!showBacklinks());
+      } else if (isMod && e.key === 'd') {
+        e.preventDefault();
+        handleOpenDailyNote();
+      } else if (isMod && e.key === 't') {
+        e.preventDefault();
+        handleOpenTemplatesPicker();
       } else if (e.key === 'Escape') {
         setShowQuickSwitcher(false);
         setShowCommandPalette(false);
         setShowSearch(false);
+        setShowTemplatesModal(false);
       }
     };
 
@@ -1746,6 +1760,106 @@ const App: Component = () => {
     }
   };
 
+  // Open today's daily note
+  const handleOpenDailyNote = async () => {
+    const vault = vaultPath();
+    if (!vault) return;
+    
+    const config = loadDailyNotesConfig();
+    if (!config.enabled) {
+      console.log('[DailyNotes] Daily notes are disabled');
+      return;
+    }
+    
+    try {
+      const { path, isNew } = await openDailyNote(vault, config);
+      console.log('[DailyNotes] Opened daily note:', path, isNew ? '(new)' : '(existing)');
+      
+      // Open the file in a tab
+      const content = await invoke<string>('read_file', { path });
+      const name = path.split('/').pop() || 'Daily Note';
+      
+      // Check if tab already exists
+      const existingIndex = tabs().findIndex(t => t.path === path);
+      if (existingIndex >= 0) {
+        setActiveTabIndex(existingIndex);
+      } else {
+        setTabs([...tabs(), { path, name, content, isDirty: false }]);
+        setActiveTabIndex(tabs().length);
+      }
+      
+      // Refresh sidebar to show new file/folder
+      if (isNew) {
+        refreshSidebar?.();
+      }
+    } catch (err) {
+      console.error('[DailyNotes] Failed to open daily note:', err);
+    }
+  };
+
+  // Open templates picker
+  const handleOpenTemplatesPicker = async () => {
+    const vault = vaultPath();
+    if (!vault) return;
+    
+    setTemplatesLoading(true);
+    try {
+      const config = loadTemplatesConfig();
+      const templates = await listTemplates(vault, config);
+      setAvailableTemplates(templates);
+      setShowTemplatesModal(true);
+    } catch (err) {
+      console.error('[Templates] Failed to load templates:', err);
+    } finally {
+      setTemplatesLoading(false);
+    }
+  };
+
+  // Create note from selected template
+  const handleCreateFromTemplate = async (template: TemplateInfo) => {
+    const vault = vaultPath();
+    if (!vault) return;
+    
+    const noteName = prompt('Enter note name:');
+    if (!noteName) return;
+    
+    const targetFolder = prompt('Enter folder (or leave empty for root):', '') || '';
+    
+    try {
+      const notePath = await createNoteFromTemplate(
+        vault,
+        template.path,
+        targetFolder,
+        noteName
+      );
+      
+      // Open the new note
+      const content = await invoke<string>('read_file', { path: notePath });
+      const name = notePath.split('/').pop() || noteName;
+      
+      setTabs([...tabs(), { path: notePath, name, content, isDirty: false }]);
+      setActiveTabIndex(tabs().length);
+      setShowTemplatesModal(false);
+      
+      // Refresh sidebar
+      refreshSidebar?.();
+    } catch (err) {
+      console.error('[Templates] Failed to create note from template:', err);
+    }
+  };
+
+  // Insert template content at cursor (for future use)
+  const handleInsertTemplate = async (template: TemplateInfo) => {
+    try {
+      const content = await getTemplateContent(template.path);
+      // TODO: Insert at cursor position in editor
+      console.log('[Templates] Template content to insert:', content.substring(0, 100));
+      setShowTemplatesModal(false);
+    } catch (err) {
+      console.error('[Templates] Failed to get template content:', err);
+    }
+  };
+
   const commands = [
     { id: 'new-file', name: 'New File', action: () => console.log('New file - use sidebar') },
     { id: 'save', name: 'Save', shortcut: 'Ctrl+S', action: saveCurrentTab },
@@ -1755,6 +1869,8 @@ const App: Component = () => {
     { id: 'toggle-outline', name: 'Toggle Outline', shortcut: 'Ctrl+Shift+O', action: () => setShowOutline(!showOutline()) },
     { id: 'toggle-backlinks', name: 'Toggle Backlinks', shortcut: 'Ctrl+Shift+B', action: () => setShowBacklinks(!showBacklinks()) },
     { id: 'close-tab', name: 'Close Tab', action: () => activeTabIndex() >= 0 && closeTab(activeTabIndex()) },
+    { id: 'daily-note', name: 'Open Daily Note', shortcut: 'Ctrl+D', action: handleOpenDailyNote },
+    { id: 'templates', name: 'Insert Template', shortcut: 'Ctrl+T', action: handleOpenTemplatesPicker },
   ];
 
   // Resize handlers for panels
@@ -2372,6 +2488,61 @@ const App: Component = () => {
           commands={commands}
           onClose={() => setShowCommandPalette(false)}
         />
+      </Show>
+
+      {/* Templates Modal */}
+      <Show when={showTemplatesModal()}>
+        <div class="modal-overlay" onClick={() => setShowTemplatesModal(false)}>
+          <div class="templates-modal" onClick={(e) => e.stopPropagation()}>
+            <div class="templates-modal-header">
+              <h3>Insert Template</h3>
+              <button class="modal-close" onClick={() => setShowTemplatesModal(false)}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
+            <div class="templates-modal-body">
+              <Show when={templatesLoading()}>
+                <div class="templates-loading">
+                  <div class="spinner"></div>
+                  <span>Loading templates...</span>
+                </div>
+              </Show>
+              <Show when={!templatesLoading() && availableTemplates().length === 0}>
+                <div class="templates-empty">
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="12" y1="18" x2="12" y2="12"></line>
+                    <line x1="9" y1="15" x2="15" y2="15"></line>
+                  </svg>
+                  <p>No templates found</p>
+                  <span class="templates-hint">Create templates in the "{loadTemplatesConfig().folder}" folder</span>
+                </div>
+              </Show>
+              <Show when={!templatesLoading() && availableTemplates().length > 0}>
+                <div class="templates-list">
+                  <For each={availableTemplates()}>
+                    {(template) => (
+                      <button
+                        class="template-item"
+                        onClick={() => handleCreateFromTemplate(template)}
+                      >
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                          <polyline points="14 2 14 8 20 8"></polyline>
+                        </svg>
+                        <span>{template.name}</span>
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </Show>
+            </div>
+          </div>
+        </div>
       </Show>
 
       <Show when={showSearch()}>

@@ -1308,6 +1308,110 @@ body {
   color: var(--text-secondary);
 }
 
+/* Templates Modal */
+.templates-modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 400px;
+  max-height: 500px;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.templates-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.templates-modal-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.templates-modal-body {
+  padding: 12px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.templates-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 40px 20px;
+  color: var(--text-secondary);
+}
+
+.templates-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 40px 20px;
+  text-align: center;
+}
+
+.templates-empty svg {
+  color: var(--text-secondary);
+  opacity: 0.5;
+}
+
+.templates-empty p {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
+.templates-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.templates-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.template-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+  text-align: left;
+  width: 100%;
+}
+
+.template-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.template-item svg {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.template-item span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Search Panel */
 .search-panel {
   background: var(--bg-secondary);
@@ -3518,6 +3622,39 @@ body {
 .setting-input:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+.setting-textarea {
+  width: 100%;
+  padding: 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  resize: vertical;
+  min-height: 100px;
+  line-height: 1.5;
+}
+
+.setting-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.setting-item.full-width {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.setting-item.full-width .setting-info {
+  width: 100%;
+}
+
+.setting-item.full-width .setting-textarea {
+  width: 100%;
 }
 
 .setting-color {

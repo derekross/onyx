@@ -46,6 +46,18 @@ import {
 } from '../lib/skills';
 import { usePlatformInfo, isMobile } from '../lib/platform';
 import { authenticateWithBiometric } from '../lib/biometric';
+import {
+  loadDailyNotesConfig,
+  saveDailyNotesConfig,
+  DEFAULT_DAILY_NOTES_CONFIG,
+  type DailyNotesConfig,
+} from '../lib/daily-notes';
+import {
+  loadTemplatesConfig,
+  saveTemplatesConfig,
+  DEFAULT_TEMPLATES_CONFIG,
+  type TemplatesConfig,
+} from '../lib/templates';
 
 type SettingsSection = 'general' | 'editor' | 'files' | 'appearance' | 'hotkeys' | 'opencode' | 'productivity' | 'sync' | 'nostr' | 'about';
 type LoginTab = 'generate' | 'import';
@@ -229,6 +241,12 @@ const Settings: Component<SettingsProps> = (props) => {
   const [useWikilinks, setUseWikilinks] = createSignal(
     localStorage.getItem('use_wikilinks') !== 'false' // Default to true
   );
+
+  // Daily Notes settings
+  const [dailyNotesConfig, setDailyNotesConfig] = createSignal<DailyNotesConfig>(loadDailyNotesConfig());
+
+  // Templates settings
+  const [templatesConfig, setTemplatesConfig] = createSignal<TemplatesConfig>(loadTemplatesConfig());
 
   // Editor settings
   const [editorFontFamily, setEditorFontFamily] = createSignal(
@@ -1721,6 +1739,139 @@ const Settings: Component<SettingsProps> = (props) => {
                     <div class="setting-description">Time in seconds before auto-saving</div>
                   </div>
                   <input type="number" class="setting-input" value="2" min="1" max="60" />
+                </div>
+
+                <div class="settings-divider" />
+
+                <div class="settings-section-title">Daily Notes</div>
+
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">Enable Daily Notes</div>
+                    <div class="setting-description">Create a new note for each day</div>
+                  </div>
+                  <label class="setting-toggle">
+                    <input 
+                      type="checkbox" 
+                      checked={dailyNotesConfig().enabled}
+                      onChange={(e) => {
+                        const newConfig = { ...dailyNotesConfig(), enabled: e.currentTarget.checked };
+                        setDailyNotesConfig(newConfig);
+                        saveDailyNotesConfig(newConfig);
+                      }}
+                    />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">Daily Notes folder</div>
+                    <div class="setting-description">Folder where daily notes will be created</div>
+                  </div>
+                  <input
+                    type="text"
+                    class="setting-input wide"
+                    value={dailyNotesConfig().folder}
+                    onInput={(e) => {
+                      const newConfig = { ...dailyNotesConfig(), folder: e.currentTarget.value };
+                      setDailyNotesConfig(newConfig);
+                      saveDailyNotesConfig(newConfig);
+                    }}
+                    placeholder="Daily Notes"
+                  />
+                </div>
+
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">Date format</div>
+                    <div class="setting-description">Format for daily note filenames (e.g., YYYY-MM-DD)</div>
+                  </div>
+                  <input
+                    type="text"
+                    class="setting-input"
+                    value={dailyNotesConfig().dateFormat}
+                    onInput={(e) => {
+                      const newConfig = { ...dailyNotesConfig(), dateFormat: e.currentTarget.value };
+                      setDailyNotesConfig(newConfig);
+                      saveDailyNotesConfig(newConfig);
+                    }}
+                    placeholder="YYYY-MM-DD"
+                  />
+                </div>
+
+                <div class="setting-item full-width">
+                  <div class="setting-info">
+                    <div class="setting-name">Daily note template</div>
+                    <div class="setting-description">
+                      Content template for new daily notes. Use {'{{date}}'}, {'{{date:FORMAT}}'}, {'{{time}}'}, {'{{title}}'} for variables.
+                    </div>
+                  </div>
+                  <textarea
+                    class="setting-textarea"
+                    rows={8}
+                    value={dailyNotesConfig().template}
+                    onInput={(e) => {
+                      const newConfig = { ...dailyNotesConfig(), template: e.currentTarget.value };
+                      setDailyNotesConfig(newConfig);
+                      saveDailyNotesConfig(newConfig);
+                    }}
+                    placeholder="# {{date:MMMM D, YYYY}}&#10;&#10;## Tasks&#10;- [ ] &#10;&#10;## Notes&#10;"
+                  />
+                </div>
+
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">Reset to defaults</div>
+                    <div class="setting-description">Reset daily notes settings to default values</div>
+                  </div>
+                  <button
+                    class="setting-button secondary"
+                    onClick={() => {
+                      setDailyNotesConfig(DEFAULT_DAILY_NOTES_CONFIG);
+                      saveDailyNotesConfig(DEFAULT_DAILY_NOTES_CONFIG);
+                    }}
+                  >
+                    Reset
+                  </button>
+                </div>
+
+                <div class="settings-divider" />
+
+                <div class="settings-section-title">Templates</div>
+
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">Templates folder</div>
+                    <div class="setting-description">Folder containing your note templates</div>
+                  </div>
+                  <input
+                    type="text"
+                    class="setting-input wide"
+                    value={templatesConfig().folder}
+                    onInput={(e) => {
+                      const newConfig = { ...templatesConfig(), folder: e.currentTarget.value };
+                      setTemplatesConfig(newConfig);
+                      saveTemplatesConfig(newConfig);
+                    }}
+                    placeholder="Templates"
+                  />
+                </div>
+
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">Reset to defaults</div>
+                    <div class="setting-description">Reset templates settings to default values</div>
+                  </div>
+                  <button
+                    class="setting-button secondary"
+                    onClick={() => {
+                      setTemplatesConfig(DEFAULT_TEMPLATES_CONFIG);
+                      saveTemplatesConfig(DEFAULT_TEMPLATES_CONFIG);
+                    }}
+                  >
+                    Reset
+                  </button>
                 </div>
 
                 <div class="settings-divider" />
