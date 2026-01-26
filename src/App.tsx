@@ -26,6 +26,7 @@ import { writeTextFile, mkdir, exists } from '@tauri-apps/plugin-fs';
 import { onOpenUrl, getCurrent as getDeepLinkCurrent } from '@tauri-apps/plugin-deep-link';
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { getSyncEngine, getCurrentLogin } from './lib/nostr';
+import { isServerRunning, createSession, sendPrompt } from './lib/opencode/client';
 import { getSignerFromStoredLogin } from './lib/nostr/signer';
 import { buildNoteIndex, resolveWikilink, NoteIndex, FileEntry, NoteGraph, buildNoteGraph } from './lib/editor/note-index';
 import { HeadingInfo } from './lib/editor/heading-plugin';
@@ -674,14 +675,45 @@ const App: Component = () => {
       return;
     }
     
-    // TODO: Integrate with OpenCode SDK to process the prompt
-    // For now, return a placeholder response
     console.log('[DeepLink] AI prompt:', prompt);
     console.log('[DeepLink] Context length:', context.length);
     
-    // Placeholder - in the future this would call OpenCode
-    const result = `[AI processing not yet implemented. Prompt: "${prompt.substring(0, 50)}..."]`;
-    await writeAiResponse(callbackId, result);
+    // Check if OpenCode server is running
+    const serverRunning = await isServerRunning(3000);
+    if (!serverRunning) {
+      console.error('[DeepLink] OpenCode server is not running');
+      await writeAiResponse(callbackId, '', 'OpenCode is not running. Open the OpenCode panel in Onyx first.');
+      return;
+    }
+    
+    try {
+      // Create a temporary session for this request
+      const session = await createSession('Clipper AI Request');
+      
+      // Build the full prompt with context
+      const fullPrompt = context 
+        ? `${prompt}\n\nContext:\n${context}`
+        : prompt;
+      
+      // Send the prompt and wait for response
+      const response = await sendPrompt(session.id, fullPrompt);
+      
+      // Extract text from response parts
+      const resultText = response.parts
+        .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+        .map(part => part.text)
+        .join('\n');
+      
+      if (resultText) {
+        await writeAiResponse(callbackId, resultText);
+      } else {
+        await writeAiResponse(callbackId, '', 'No response generated');
+      }
+    } catch (err) {
+      console.error('[DeepLink] Failed to process AI prompt:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      await writeAiResponse(callbackId, '', `Failed to process: ${errorMessage}`);
+    }
   };
 
   const writeAiResponse = async (callbackId: string, result: string, error?: string) => {
