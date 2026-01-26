@@ -31,7 +31,12 @@ import {
   getProviders,
   getCurrentModel,
   setCurrentModel,
+  getAllProvidersWithAuthStatus,
+  setProviderApiKey,
+  removeProviderAuth,
+  startProviderOAuth,
   type ProviderInfo,
+  type ProviderAuthInfo,
 } from '../lib/opencode/client';
 import {
   fetchSkillsShLeaderboard,
@@ -236,6 +241,19 @@ const Settings: Component<SettingsProps> = (props) => {
   const [modelDropdownOpen, setModelDropdownOpen] = createSignal(false);
   let modelSearchRef: HTMLInputElement | undefined;
   let modelDropdownRef: HTMLDivElement | undefined;
+
+  // API Keys settings
+  const [apiKeyProviders, setApiKeyProviders] = createSignal<ProviderAuthInfo[]>([]);
+  const [apiKeysLoading, setApiKeysLoading] = createSignal(false);
+  const [apiKeyInputs, setApiKeyInputs] = createSignal<Record<string, string>>({});
+  const [apiKeySaving, setApiKeySaving] = createSignal<string | null>(null);
+  const [apiKeyError, setApiKeyError] = createSignal<string | null>(null);
+  const [expandedProvider, setExpandedProvider] = createSignal<string | null>(null);
+  
+  // Provider picker modal
+  const [providerPickerOpen, setProviderPickerOpen] = createSignal(false);
+  const [providerSearch, setProviderSearch] = createSignal('');
+  let providerSearchRef: HTMLInputElement | undefined;
 
   // Files & Links settings
   const [useWikilinks, setUseWikilinks] = createSignal(
@@ -1552,6 +1570,106 @@ const Settings: Component<SettingsProps> = (props) => {
     }
   };
 
+  // Load API keys providers
+  const loadApiKeyProviders = async () => {
+    if (!openCodeServerRunning()) return;
+    
+    setApiKeysLoading(true);
+    setApiKeyError(null);
+    try {
+      const providers = await getAllProvidersWithAuthStatus();
+      setApiKeyProviders(providers);
+    } catch (err) {
+      console.error('Failed to load API key providers:', err);
+      setApiKeyError(err instanceof Error ? err.message : 'Failed to load providers');
+    } finally {
+      setApiKeysLoading(false);
+    }
+  };
+
+  // Handle saving an API key for a provider
+  const handleSaveApiKey = async (providerId: string) => {
+    const key = apiKeyInputs()[providerId];
+    if (!key?.trim()) {
+      setApiKeyError('Please enter an API key');
+      return;
+    }
+    
+    setApiKeySaving(providerId);
+    setApiKeyError(null);
+    try {
+      await setProviderApiKey(providerId, key.trim());
+      // Clear the input and refresh providers
+      setApiKeyInputs(prev => ({ ...prev, [providerId]: '' }));
+      setExpandedProvider(null);
+      // Refresh both API key providers and model providers
+      await Promise.all([
+        loadApiKeyProviders(),
+        loadOpenCodeConfig(),
+      ]);
+    } catch (err) {
+      console.error('Failed to save API key:', err);
+      setApiKeyError(err instanceof Error ? err.message : 'Failed to save API key');
+    } finally {
+      setApiKeySaving(null);
+    }
+  };
+
+  // Handle removing a provider's API key
+  const handleRemoveApiKey = async (providerId: string) => {
+    setApiKeySaving(providerId);
+    setApiKeyError(null);
+    try {
+      await removeProviderAuth(providerId);
+      // Refresh both API key providers and model providers
+      await Promise.all([
+        loadApiKeyProviders(),
+        loadOpenCodeConfig(),
+      ]);
+    } catch (err) {
+      console.error('Failed to remove API key:', err);
+      setApiKeyError(err instanceof Error ? err.message : 'Failed to remove API key');
+    } finally {
+      setApiKeySaving(null);
+    }
+  };
+
+  // Handle starting OAuth flow
+  const handleStartOAuth = async (providerId: string, methodIndex: number = 0) => {
+    setApiKeySaving(providerId);
+    setApiKeyError(null);
+    try {
+      const result = await startProviderOAuth(providerId, methodIndex);
+      if (result?.url) {
+        // Open the OAuth URL in the browser
+        await open(result.url);
+        
+        // Show instructions if available
+        if (result.instructions) {
+          setApiKeyError(result.instructions);
+        }
+        
+        // If method is 'auto', the callback should happen automatically
+        // If method is 'code', user needs to paste the code
+        if (result.method === 'auto') {
+          // Start polling or wait for callback
+          // For now, we'll just refresh after a delay
+          setTimeout(async () => {
+            await Promise.all([
+              loadApiKeyProviders(),
+              loadOpenCodeConfig(),
+            ]);
+            setApiKeySaving(null);
+          }, 5000);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to start OAuth flow:', err);
+      setApiKeyError(err instanceof Error ? err.message : 'Failed to start OAuth');
+      setApiKeySaving(null);
+    }
+  };
+
   // Handle model change
   const handleModelChange = async (model: string) => {
     try {
@@ -1596,6 +1714,38 @@ const Settings: Component<SettingsProps> = (props) => {
     return model; // Fallback to raw model string
   };
 
+  // Get configured providers (connected ones)
+  const configuredProviders = () => apiKeyProviders().filter(p => p.isConnected);
+  
+  // Get unconfigured providers for the picker
+  const unconfiguredProviders = () => apiKeyProviders().filter(p => !p.isConnected);
+  
+  // Filter unconfigured providers based on search
+  const filteredPickerProviders = () => {
+    const search = providerSearch().toLowerCase().trim();
+    const providers = unconfiguredProviders();
+    if (!search) return providers;
+    
+    return providers.filter(provider =>
+      provider.name.toLowerCase().includes(search) ||
+      provider.id.toLowerCase().includes(search)
+    );
+  };
+  
+  // Handle opening provider picker
+  const handleOpenProviderPicker = () => {
+    setProviderPickerOpen(true);
+    setProviderSearch('');
+    // Focus search input after render
+    setTimeout(() => providerSearchRef?.focus(), 50);
+  };
+  
+  // Handle selecting a provider from picker
+  const handleSelectProvider = (providerId: string) => {
+    setProviderPickerOpen(false);
+    setExpandedProvider(providerId);
+  };
+
   // Handle click outside to close dropdown
   const handleClickOutside = (e: MouseEvent) => {
     if (modelDropdownRef && !modelDropdownRef.contains(e.target as Node)) {
@@ -1607,6 +1757,13 @@ const Settings: Component<SettingsProps> = (props) => {
   createEffect(() => {
     if (activeSection() === 'opencode') {
       loadOpenCodeConfig();
+    }
+  });
+
+  // Load API key providers when server is running and we're on opencode section
+  createEffect(() => {
+    if (activeSection() === 'opencode' && openCodeServerRunning() && !openCodeLoading()) {
+      loadApiKeyProviders();
     }
   });
 
@@ -2390,6 +2547,252 @@ const Settings: Component<SettingsProps> = (props) => {
                         <div class="setting-name">Current model</div>
                         <div class="setting-description opencode-current-model">{openCodeModel()}</div>
                       </div>
+                    </div>
+                  </Show>
+                </Show>
+
+                {/* API Keys Section */}
+                <Show when={openCodeServerRunning()}>
+                  <div class="settings-section-title">API Keys</div>
+                  
+                  <Show when={apiKeysLoading()}>
+                    <div class="setting-item">
+                      <div class="opencode-loading">
+                        <div class="spinner"></div>
+                        <span>Loading providers...</span>
+                      </div>
+                    </div>
+                  </Show>
+
+                  <Show when={apiKeyError()}>
+                    <div class="settings-notice warning">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="8" x2="12" y2="12"></line>
+                        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                      </svg>
+                      <p>{apiKeyError()}</p>
+                    </div>
+                  </Show>
+
+                  <Show when={!apiKeysLoading() && apiKeyProviders().length > 0}>
+                    {/* Configured providers */}
+                    <Show when={configuredProviders().length > 0}>
+                      <div class="api-keys-list">
+                        <For each={configuredProviders()}>
+                          {(provider) => (
+                            <div class={`api-key-provider connected ${expandedProvider() === provider.id ? 'expanded' : ''}`}>
+                              <div 
+                                class="api-key-provider-header"
+                                onClick={() => setExpandedProvider(expandedProvider() === provider.id ? null : provider.id)}
+                              >
+                                <div class="api-key-provider-info">
+                                  <span class="api-key-provider-name">{provider.name}</span>
+                                  <span class="api-key-status connected">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                      <polyline points="20 6 9 17 4 12"></polyline>
+                                    </svg>
+                                    Connected
+                                  </span>
+                                </div>
+                                <svg 
+                                  width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                  class="api-key-chevron"
+                                >
+                                  <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                              </div>
+                              
+                              <Show when={expandedProvider() === provider.id}>
+                                <div class="api-key-provider-content">
+                                  <div class="api-key-actions">
+                                    <button
+                                      class="setting-button secondary danger"
+                                      onClick={() => handleRemoveApiKey(provider.id)}
+                                      disabled={apiKeySaving() === provider.id}
+                                    >
+                                      {apiKeySaving() === provider.id ? (
+                                        <div class="spinner small"></div>
+                                      ) : (
+                                        'Remove'
+                                      )}
+                                    </button>
+                                  </div>
+                                </div>
+                              </Show>
+                            </div>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
+                    
+                    {/* Provider being configured (expanded unconfigured provider) */}
+                    <For each={unconfiguredProviders()}>
+                      {(provider) => (
+                        <Show when={expandedProvider() === provider.id}>
+                          <div class="api-keys-list" style="margin-top: 8px;">
+                            <div class={`api-key-provider expanded`}>
+                              <div 
+                                class="api-key-provider-header"
+                                onClick={() => setExpandedProvider(null)}
+                              >
+                                <div class="api-key-provider-info">
+                                  <span class="api-key-provider-name">{provider.name}</span>
+                                  <span class="api-key-status not-configured">Configuring...</span>
+                                </div>
+                                <svg 
+                                  width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                  class="api-key-chevron"
+                                >
+                                  <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                              </div>
+                              
+                              <div class="api-key-provider-content">
+                                {/* Show available auth methods */}
+                                <For each={provider.authMethods}>
+                                  {(method, methodIndex) => (
+                                    <div class="api-key-method">
+                                      <Show when={method.type === 'api'}>
+                                        <div class="api-key-input-group">
+                                          <input
+                                            type="password"
+                                            class="setting-input wide"
+                                            placeholder={`Enter ${provider.name} API key`}
+                                            value={apiKeyInputs()[provider.id] || ''}
+                                            onInput={(e) => setApiKeyInputs(prev => ({ ...prev, [provider.id]: e.currentTarget.value }))}
+                                            onKeyDown={(e) => {
+                                              if (e.key === 'Enter') {
+                                                handleSaveApiKey(provider.id);
+                                              }
+                                            }}
+                                          />
+                                          <button
+                                            class="setting-button"
+                                            onClick={() => handleSaveApiKey(provider.id)}
+                                            disabled={apiKeySaving() === provider.id || !apiKeyInputs()[provider.id]?.trim()}
+                                          >
+                                            {apiKeySaving() === provider.id ? (
+                                              <div class="spinner small"></div>
+                                            ) : (
+                                              'Save'
+                                            )}
+                                          </button>
+                                        </div>
+                                        <Show when={provider.env.length > 0}>
+                                          <p class="setting-hint">
+                                            Environment variable: <code>{provider.env[0]}</code>
+                                          </p>
+                                        </Show>
+                                      </Show>
+                                      
+                                      <Show when={method.type === 'oauth'}>
+                                        <button
+                                          class="setting-button oauth-button"
+                                          onClick={() => handleStartOAuth(provider.id, methodIndex())}
+                                          disabled={apiKeySaving() === provider.id}
+                                        >
+                                          {apiKeySaving() === provider.id ? (
+                                            <div class="spinner small"></div>
+                                          ) : (
+                                            <>
+                                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                                                <polyline points="15 3 21 3 21 9"></polyline>
+                                                <line x1="10" y1="14" x2="21" y2="3"></line>
+                                              </svg>
+                                              {method.label}
+                                            </>
+                                          )}
+                                        </button>
+                                      </Show>
+                                    </div>
+                                  )}
+                                </For>
+                              </div>
+                            </div>
+                          </div>
+                        </Show>
+                      )}
+                    </For>
+                    
+                    {/* Add Provider button */}
+                    <Show when={unconfiguredProviders().length > 0}>
+                      <button 
+                        class="setting-button add-provider-button"
+                        onClick={handleOpenProviderPicker}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <line x1="12" y1="5" x2="12" y2="19"></line>
+                          <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                        Add Provider
+                      </button>
+                    </Show>
+                    
+                    {/* Provider Picker Modal */}
+                    <Show when={providerPickerOpen()}>
+                      <div class="provider-picker-overlay" onClick={() => setProviderPickerOpen(false)}>
+                        <div class="provider-picker-modal" onClick={(e) => e.stopPropagation()}>
+                          <div class="provider-picker-header">
+                            <h3>Add Provider</h3>
+                            <button class="provider-picker-close" onClick={() => setProviderPickerOpen(false)}>
+                              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="18" y1="6" x2="6" y2="18"></line>
+                                <line x1="6" y1="6" x2="18" y2="18"></line>
+                              </svg>
+                            </button>
+                          </div>
+                          <div class="provider-picker-search">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                              <circle cx="11" cy="11" r="8"></circle>
+                              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                            </svg>
+                            <input
+                              ref={providerSearchRef}
+                              type="text"
+                              placeholder="Search providers..."
+                              value={providerSearch()}
+                              onInput={(e) => setProviderSearch(e.currentTarget.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Escape') {
+                                  setProviderPickerOpen(false);
+                                }
+                              }}
+                            />
+                          </div>
+                          <div class="provider-picker-list">
+                            <Show when={filteredPickerProviders().length > 0} fallback={
+                              <div class="provider-picker-empty">
+                                No providers found
+                              </div>
+                            }>
+                              <For each={filteredPickerProviders()}>
+                                {(provider) => (
+                                  <button
+                                    class="provider-picker-item"
+                                    onClick={() => handleSelectProvider(provider.id)}
+                                  >
+                                    <span class="provider-picker-item-name">{provider.name}</span>
+                                    <span class="provider-picker-item-id">{provider.id}</span>
+                                  </button>
+                                )}
+                              </For>
+                            </Show>
+                          </div>
+                        </div>
+                      </div>
+                    </Show>
+                  </Show>
+
+                  <Show when={!apiKeysLoading() && apiKeyProviders().length === 0}>
+                    <div class="settings-notice">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="8" x2="12" y2="12"></line>
+                        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                      </svg>
+                      <p>No providers available. Make sure OpenCode is properly configured.</p>
                     </div>
                   </Show>
                 </Show>
