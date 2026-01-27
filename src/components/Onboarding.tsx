@@ -288,11 +288,26 @@ const Onboarding: Component<OnboardingProps> = (props) => {
     goNext();
   };
 
+  // === Utility Functions ===
+  // Helper to add timeout to async operations
+  const withTimeout = <T,>(promise: Promise<T>, ms: number, errorMsg: string): Promise<T> => {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) => 
+        setTimeout(() => reject(new Error(errorMsg)), ms)
+      )
+    ]);
+  };
+
   // === OpenCode Functions ===
   const checkOpenCodeInstalled = async () => {
     setOpenCodeStatus('checking');
     try {
-      const path = await invoke<string | null>('check_opencode_installed');
+      const path = await withTimeout(
+        invoke<string | null>('check_opencode_installed'),
+        10000, // 10 second timeout
+        'Timed out checking for OpenCode'
+      );
       if (path) {
         setOpenCodeInstalled(true);
         setOpenCodeStatus('installed');
@@ -322,6 +337,14 @@ const Onboarding: Component<OnboardingProps> = (props) => {
       }
     });
 
+    // Set a timeout to prevent hanging forever (5 minutes max for installation)
+    const timeoutId = setTimeout(() => {
+      console.error('OpenCode installation timed out');
+      setOpenCodeError('Installation timed out. You can try again later in Settings.');
+      setOpenCodeStatus('error');
+      unlisten();
+    }, 5 * 60 * 1000);
+
     try {
       await invoke('install_opencode');
     } catch (err) {
@@ -329,6 +352,7 @@ const Onboarding: Component<OnboardingProps> = (props) => {
       setOpenCodeError(err instanceof Error ? err.message : 'Installation failed');
       setOpenCodeStatus('error');
     } finally {
+      clearTimeout(timeoutId);
       unlisten();
     }
   };
@@ -343,7 +367,12 @@ const Onboarding: Component<OnboardingProps> = (props) => {
     setSkillsLoading(true);
     setSkillsError(null);
     try {
-      const response = await fetch(SKILLS_MANIFEST_URL);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+      
+      const response = await fetch(SKILLS_MANIFEST_URL, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      
       if (!response.ok) throw new Error('Failed to fetch skills');
       
       const manifest = await response.json();
@@ -355,7 +384,11 @@ const Onboarding: Component<OnboardingProps> = (props) => {
       setSelectedSkills(allIds);
     } catch (err) {
       console.error('Failed to load skills:', err);
-      setSkillsError(err instanceof Error ? err.message : 'Failed to load skills');
+      if (err instanceof Error && err.name === 'AbortError') {
+        setSkillsError('Timed out loading skills. Check your internet connection.');
+      } else {
+        setSkillsError(err instanceof Error ? err.message : 'Failed to load skills');
+      }
     } finally {
       setSkillsLoading(false);
     }
@@ -384,29 +417,51 @@ const Onboarding: Component<OnboardingProps> = (props) => {
     setSkillsError(null);
     const installed: string[] = [];
 
+    // Overall timeout for skill installation (2 minutes)
+    const overallTimeout = setTimeout(() => {
+      console.error('Skills installation timed out');
+      setSkillsError('Installation timed out. You can install skills later in Settings.');
+      setSkillsInstalling(false);
+      // Still proceed with whatever was installed
+      setInstalledSkills(installed);
+      goNext();
+    }, 2 * 60 * 1000);
+
     try {
       for (const skillId of toInstall) {
         const skill = availableSkills().find(s => s.id === skillId);
         if (!skill) continue;
 
         try {
-          // Download all skill files
+          // Download all skill files with timeout
           for (const file of skill.files) {
             const fileUrl = `${SKILLS_BASE_URL}/${skillId}/${file}`;
-            const response = await fetch(fileUrl);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 sec per file
+            
+            const response = await fetch(fileUrl, { signal: controller.signal });
+            clearTimeout(timeoutId);
+            
             if (!response.ok) throw new Error(`Failed to download ${file}`);
             const content = await response.text();
-            await invoke('skill_save_file', { skillId, fileName: file, content });
+            await withTimeout(
+              invoke('skill_save_file', { skillId, fileName: file, content }),
+              10000,
+              `Timed out saving ${file}`
+            );
           }
           installed.push(skillId);
         } catch (err) {
           console.error(`Failed to install skill ${skillId}:`, err);
+          // Continue with other skills
         }
       }
 
+      clearTimeout(overallTimeout);
       setInstalledSkills(installed);
       goNext();
     } catch (err) {
+      clearTimeout(overallTimeout);
       console.error('Failed to install skills:', err);
       setSkillsError(err instanceof Error ? err.message : 'Failed to install skills');
     } finally {
