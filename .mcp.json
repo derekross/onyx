@@ -9,6 +9,11 @@
       "type": "stdio",
       "command": "npx",
       "args": ["-y", "@nostrbook/mcp@latest"]
+    },
+    "tauri": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@hypothesi/tauri-mcp-server@latest"]
     }
   }
 }

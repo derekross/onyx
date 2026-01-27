@@ -328,19 +328,6 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
     // Extract session ID from various possible locations in the event
     const eventSessionId = (event.properties?.sessionID || event.properties?.session_id || event.properties?.id) as string | undefined;
     
-    // Debug: log all events to understand question flow
-    if (event.type.includes('permission') || event.type.includes('question')) {
-      console.log('[OpenCodeChat] Permission/Question event:', event.type, event.properties);
-    }
-    
-    // Debug: log tool parts that might contain questions
-    if (event.type === 'message.part.updated') {
-      const part = event.properties?.part as { type?: string; tool?: string; metadata?: Record<string, unknown> } | undefined;
-      if (part?.tool === 'question') {
-        console.log('[OpenCodeChat] Question tool part:', part);
-      }
-    }
-    
     switch (event.type) {
       case 'message.part.updated': {
         // The delta text comes directly in properties.delta
@@ -532,7 +519,7 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
         break;
       }
       
-      // Permission/Question from OpenCode
+      // Permission/Question from OpenCode (v1 API)
       case 'permission.updated': {
         const permission = event.properties as {
           id?: string;
@@ -542,7 +529,7 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
           metadata?: Record<string, unknown>;
         };
         
-        console.log('[OpenCodeChat] Permission event:', permission);
+        
         
         // Only handle permissions for our session
         if (permission.sessionID !== currentSessionId) break;
@@ -606,6 +593,63 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
             remember,
           });
         }
+        break;
+      }
+      
+      // Permission from OpenCode (v2 API - permission.asked)
+      case 'permission.asked': {
+        const permission = event.properties as {
+          id?: string;
+          sessionID?: string;
+          permission?: string; // v2 uses 'permission' instead of 'type'
+          patterns?: string[];
+          metadata?: Record<string, unknown>;
+          always?: string[]; // v2 uses 'always' instead of 'remember'
+        };
+        
+        
+        
+        // Only handle permissions for our session
+        if (permission.sessionID !== currentSessionId) break;
+        
+        const metadata = permission.metadata || {};
+        const permType = permission.permission || 'unknown';
+        
+        // Extract details from metadata based on permission type
+        let filePath: string | undefined;
+        let command: string | undefined;
+        let description: string | undefined;
+        const remember = permission.always;
+        
+        // Check for bash/shell permissions
+        if (permType === 'bash' || permType === 'shell' || permType.includes('bash') || permType.includes('command')) {
+          command = metadata.command as string || metadata.input as string || (permission.patterns?.[0]);
+          description = `Run command: ${command || 'unknown'}`;
+        } else if (permType === 'edit' || permType === 'write' || permType === 'file:write') {
+          filePath = metadata.path as string || metadata.filePath as string || (permission.patterns?.[0]);
+          description = `Edit file: ${filePath || 'unknown'}`;
+        } else if (permType === 'read' || permType === 'file:read') {
+          filePath = metadata.path as string || metadata.filePath as string || (permission.patterns?.[0]);
+          description = `Read file: ${filePath || 'unknown'}`;
+        } else if (permType === 'external_directory' || permType.includes('directory')) {
+          filePath = metadata.path as string || (permission.patterns?.[0]);
+          description = `Access directory: ${filePath || 'unknown'}`;
+        } else {
+          // Generic permission - try to extract useful info from patterns
+          const pattern = permission.patterns?.[0];
+          description = pattern ? `${permType}: ${pattern}` : `Permission: ${permType}`;
+        }
+        
+        setActivePermission({
+          id: permission.id || '',
+          sessionId: permission.sessionID || '',
+          type: permType,
+          title: `Allow ${permType}?`,
+          description,
+          filePath,
+          command,
+          remember,
+        });
         break;
       }
       

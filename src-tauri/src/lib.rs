@@ -1967,7 +1967,9 @@ pub fn run() {
                     let _ = app.emit("deep-link-received", arg.clone());
                 }
             }
-        }));
+        }))
+        // Window state plugin - remembers window position and size
+        .plugin(tauri_plugin_window_state::Builder::default().build());
 
     // Mobile-only plugins
     #[cfg(mobile)]
