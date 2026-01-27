@@ -1,6 +1,6 @@
 import { Component, onCleanup, Show, createSignal, createEffect, on } from 'solid-js';
 import { Editor, rootCtx, defaultValueCtx, editorViewCtx, parserCtx } from '@milkdown/core';
-import { commonmark } from '@milkdown/preset-commonmark';
+import { commonmark, remarkPreserveEmptyLinePlugin } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
 import { nord } from '@milkdown/theme-nord';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
@@ -121,13 +121,19 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
     setUploadVaultPath(props.vaultPath || null);
     setOnFilesUploaded(props.onFilesUploaded || null);
 
+    // Filter out remarkPreserveEmptyLinePlugin to prevent <br /> tags in empty lines
+    // This plugin causes empty paragraphs to be serialized as <br /> instead of blank lines
+    const customCommonmark = commonmark.filter(
+      (plugin) => plugin !== remarkPreserveEmptyLinePlugin.plugin && plugin !== remarkPreserveEmptyLinePlugin.options
+    );
+
     editorInstance = await Editor.make()
       .config((ctx) => {
         ctx.set(rootCtx, container);
         ctx.set(defaultValueCtx, initialContent);
       })
       .config(nord)
-      .use(commonmark)
+      .use(customCommonmark)
       .use(gfm)
       .use(embedSchema)
       .use(embedView)
