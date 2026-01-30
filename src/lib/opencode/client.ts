@@ -162,10 +162,10 @@ export interface QuestionOption {
 }
 
 /**
- * Parsed question from permission metadata
+ * Parsed question from the question tool
  */
 export interface Question {
-  permissionId: string;
+  requestId: string; // The ID to use when replying via /question/{requestId}/reply
   sessionId: string;
   header?: string;
   question: string;
@@ -445,37 +445,52 @@ export async function respondToToolPermission(
 /**
  * Respond to a question from the question tool
  * Response is an array of selected option labels
+ * Uses the v2 API endpoint /question/{requestID}/reply
  */
-export async function respondToPermission(
-  sessionId: string,
-  permissionId: string,
+export async function respondToQuestion(
+  requestId: string,
   response: string[]
 ): Promise<void> {
   if (!client) {
     initClient();
   }
-  
-  const url = `${serverUrl}/session/${sessionId}/permissions/${permissionId}`;
-  
-  console.log('[OpenCode] Responding to question:', { sessionId, permissionId, response });
-  
+
+  const url = `${serverUrl}/question/${requestId}/reply`;
+
+  console.log('[OpenCode] Responding to question:', { requestId, response });
+
+  // The v2 API expects answers as an array of arrays (one array per question)
+  // Since we only support one question at a time, wrap in a single array
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      response: response,
+      answers: [response],
     }),
   });
-  
+
   if (!res.ok) {
     const text = await res.text();
     console.error('[OpenCode] Question response failed:', res.status, text);
     throw new Error(`Failed to respond to question: ${res.status} ${text}`);
   }
-  
+
   console.log('[OpenCode] Question response sent successfully');
+}
+
+/**
+ * Legacy function name for backwards compatibility
+ * @deprecated Use respondToQuestion instead
+ */
+export async function respondToPermission(
+  sessionId: string,
+  permissionId: string,
+  response: string[]
+): Promise<void> {
+  // Try the new question endpoint first, fall back to old permissions endpoint
+  return respondToQuestion(permissionId, response);
 }
 
 /**
