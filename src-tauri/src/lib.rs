@@ -1599,6 +1599,17 @@ fn get_skills_dir() -> PathBuf {
     }
 }
 
+/// Validate a skill ID or file name to prevent path traversal
+fn validate_skill_param(param: &str, param_name: &str) -> Result<(), String> {
+    if param.is_empty() {
+        return Err(format!("{} cannot be empty", param_name));
+    }
+    if param.contains("..") || param.contains('/') || param.contains('\\') || param.contains('\0') {
+        return Err(format!("{} contains invalid characters", param_name));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn skill_is_installed(skill_id: String) -> bool {
     let skill_dir = get_skills_dir().join(&skill_id);
@@ -1607,6 +1618,8 @@ fn skill_is_installed(skill_id: String) -> bool {
 
 #[tauri::command]
 fn skill_save_file(skill_id: String, file_name: String, content: String) -> Result<(), String> {
+    validate_skill_param(&skill_id, "skill_id")?;
+    validate_skill_param(&file_name, "file_name")?;
     let skills_dir = get_skills_dir();
     let skill_dir = skills_dir.join(&skill_id);
     
@@ -1631,6 +1644,7 @@ fn skill_save_file(skill_id: String, file_name: String, content: String) -> Resu
 
 #[tauri::command]
 fn skill_delete(skill_id: String) -> Result<(), String> {
+    validate_skill_param(&skill_id, "skill_id")?;
     let skill_dir = get_skills_dir().join(&skill_id);
     if skill_dir.exists() {
         fs::remove_dir_all(&skill_dir).map_err(|e| e.to_string())
@@ -1663,6 +1677,8 @@ fn skill_list_installed() -> Result<Vec<String>, String> {
 
 #[tauri::command]
 fn skill_read_file(skill_id: String, file_name: String) -> Result<String, String> {
+    validate_skill_param(&skill_id, "skill_id")?;
+    validate_skill_param(&file_name, "file_name")?;
     let file_path = get_skills_dir().join(&skill_id).join(&file_name);
     fs::read_to_string(&file_path).map_err(|e| e.to_string())
 }

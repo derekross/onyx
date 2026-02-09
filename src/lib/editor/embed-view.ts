@@ -6,6 +6,7 @@
  */
 
 import { $view } from '@milkdown/utils';
+import { sanitizeUrl } from '../security';
 import type { NodeViewConstructor } from '@milkdown/prose/view';
 import { embedSchema } from './embed-schema';
 import {
@@ -307,7 +308,10 @@ function simpleMarkdownToHtml(markdown: string): string {
     // Code
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     // Links (but not wikilinks)
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m: string, text: string, url: string) => {
+      const safeUrl = sanitizeUrl(url);
+      return `<a href="${safeUrl}">${text}</a>`;
+    })
     // Line breaks
     .replace(/\n\n/g, '</p><p>')
     .replace(/\n/g, '<br>');

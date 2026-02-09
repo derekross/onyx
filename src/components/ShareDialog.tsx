@@ -5,7 +5,7 @@
  * Supports npub, hex pubkey, and NIP-05 identifier input.
  */
 
-import { Component, createSignal, createEffect, Show } from 'solid-js';
+import { Component, createSignal, createEffect, Show, onCleanup } from 'solid-js';
 import { parseRecipientInput, formatPubkey } from '../lib/nostr/nip05';
 import { getSyncEngine } from '../lib/nostr/sync';
 import { fetchUserProfile } from '../lib/nostr/login';
@@ -36,6 +36,10 @@ const ShareDialog: Component<ShareDialogProps> = (props) => {
 
   // Debounce timer for input validation
   let validationTimeout: number | null = null;
+
+  onCleanup(() => {
+    if (validationTimeout) clearTimeout(validationTimeout);
+  });
 
   // Validate recipient input with debounce
   createEffect(() => {

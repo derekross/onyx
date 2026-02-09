@@ -920,15 +920,23 @@ export class SyncEngine {
       .replace(/\\/g, '/')
       // Remove null bytes
       .replace(/\0/g, '')
-      // Remove directory traversal attempts
-      .replace(/\.\.\//g, '')
-      .replace(/\.\.\\/g, '')
+      // Remove control characters
+      .replace(/[\x00-\x1f\x7f]/g, '');
+    
+    // Loop to remove traversal attempts until stable (prevents ....// bypass)
+    let prev = '';
+    while (prev !== safe) {
+      prev = safe;
+      safe = safe
+        .replace(/\.\.\//g, '')
+        .replace(/\.\.\\/g, '');
+    }
+    
+    safe = safe
       // Remove leading slashes
       .replace(/^\/+/, '')
       // Remove drive letters
-      .replace(/^[a-zA-Z]:/, '')
-      // Remove control characters
-      .replace(/[\x00-\x1f\x7f]/g, '');
+      .replace(/^[a-zA-Z]:/, '');
     
     // Ensure path is not empty
     if (!safe || safe === '.' || safe === '/') {
@@ -945,7 +953,12 @@ export class SyncEngine {
     const readIds = this.getReadShareIds();
     if (!readIds.includes(eventId)) {
       readIds.push(eventId);
-      localStorage.setItem('read_share_ids', JSON.stringify(readIds));
+      // Cap at 1000 entries to prevent unbounded localStorage growth
+      const MAX_READ_IDS = 1000;
+      const trimmed = readIds.length > MAX_READ_IDS
+        ? readIds.slice(readIds.length - MAX_READ_IDS)
+        : readIds;
+      localStorage.setItem('read_share_ids', JSON.stringify(trimmed));
     }
   }
 

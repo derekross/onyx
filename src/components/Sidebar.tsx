@@ -1,4 +1,4 @@
-import { Component, createSignal, createEffect, For, Show } from 'solid-js';
+import { Component, createSignal, createEffect, For, Show, onMount, onCleanup } from 'solid-js';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -553,16 +553,23 @@ const Sidebar: Component<SidebarProps> = (props) => {
   };
 
   // Close menus when clicking elsewhere
-  if (typeof document !== 'undefined') {
-    document.addEventListener('click', (e) => {
-      closeContextMenu();
-      // Close vault menu if clicking outside of it
-      const target = e.target as HTMLElement;
-      if (!target.closest('.vault-name-btn') && !target.closest('.vault-menu')) {
-        setShowVaultMenu(false);
-      }
-    });
-  }
+  const handleGlobalClick = (e: MouseEvent) => {
+    closeContextMenu();
+    // Close vault menu if clicking outside of it
+    const target = e.target as HTMLElement;
+    if (!target.closest('.vault-name-btn') && !target.closest('.vault-menu')) {
+      setShowVaultMenu(false);
+    }
+  };
+
+  onMount(() => {
+    document.addEventListener('click', handleGlobalClick);
+  });
+
+  onCleanup(() => {
+    document.removeEventListener('click', handleGlobalClick);
+    if (searchTimeout) clearTimeout(searchTimeout);
+  });
 
   const viewTitle = () => {
     switch (props.view) {

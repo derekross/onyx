@@ -76,17 +76,25 @@ export function sanitizeFilePath(path: string): string {
     .replace(/\\/g, '/')
     // Remove null bytes (poison null byte attack)
     .replace(/\0/g, '')
-    // Remove directory traversal attempts
-    .replace(/\.\.\//g, '')
-    .replace(/\.\.\\/g, '')
+    // Remove control characters
+    .replace(/[\x00-\x1f\x7f]/g, '');
+  
+  // Loop to remove traversal attempts until stable (prevents ....// bypass)
+  let prev = '';
+  while (prev !== sanitized) {
+    prev = sanitized;
+    sanitized = sanitized
+      .replace(/\.\.\//g, '')
+      .replace(/\.\.\\/g, '');
+  }
+  
+  sanitized = sanitized
     // Remove leading slashes (absolute path attempts)
     .replace(/^\/+/, '')
     // Remove drive letters (Windows)
     .replace(/^[a-zA-Z]:/, '')
     // Remove any remaining suspicious patterns
-    .replace(/\.\.+/g, '.')
-    // Remove control characters
-    .replace(/[\x00-\x1f\x7f]/g, '');
+    .replace(/\.\.+/g, '.');
   
   // If path is empty after sanitization, use default
   if (!sanitized || sanitized === '.' || sanitized === '/') {

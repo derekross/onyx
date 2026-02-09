@@ -1072,12 +1072,12 @@ const Settings: Component<SettingsProps> = (props) => {
     const updated = relays().filter(r => r.url !== url);
     setRelays(updated);
 
-    // Save to localStorage
-    localStorage.setItem('nostr_relays', JSON.stringify(updated.map(r => r.url)));
+    // Save to localStorage (save full RelayInfo objects, consistent with handleAddRelay)
+    localStorage.setItem('nostr_relays', JSON.stringify(updated));
 
     // Update sync engine config
     const engine = getSyncEngine();
-    engine.setConfig({ relays: updated.map(r => r.url) });
+    engine.setConfig({ relays: updated.filter(r => r.write).map(r => r.url) });
   };
 
   // Add blossom server

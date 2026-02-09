@@ -34,14 +34,23 @@ export async function resolveNip05(identifier: string): Promise<Nip05Result | nu
       return null;
     }
 
-    // Fetch the .well-known/nostr.json file
+    // Fetch the .well-known/nostr.json file with timeout
     const url = `https://${domain}/.well-known/nostr.json?name=${encodeURIComponent(name)}`;
     
-    const response = await fetch(url, {
-      headers: {
-        'Accept': 'application/json',
-      },
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: {
+          'Accept': 'application/json',
+        },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (!response.ok) {
       console.warn(`NIP-05 resolution failed for ${identifier}: ${response.status}`);

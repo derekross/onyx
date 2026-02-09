@@ -51,7 +51,7 @@ class LocalSignerWrapper implements NostrSigner {
   }
 
   getSecretKey(): Uint8Array {
-    return this.secretKey;
+    return new Uint8Array(this.secretKey);
   }
 
   get nip44() {

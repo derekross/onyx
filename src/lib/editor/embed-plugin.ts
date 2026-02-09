@@ -7,6 +7,7 @@
  */
 
 import { $prose, $nodeSchema, $view, $inputRule } from '@milkdown/utils';
+import { sanitizeUrl } from '../security';
 import { Plugin, PluginKey } from '@milkdown/prose/state';
 import { InputRule } from '@milkdown/prose/inputrules';
 import type { NodeViewConstructor } from '@milkdown/prose/view';
@@ -304,7 +305,10 @@ function simpleMarkdownToHtml(markdown: string): string {
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m: string, text: string, url: string) => {
+      const safeUrl = sanitizeUrl(url);
+      return `<a href="${safeUrl}">${text}</a>`;
+    })
     .replace(/\n\n/g, '</p><p>')
     .replace(/\n/g, '<br>') + '</p>';
 }

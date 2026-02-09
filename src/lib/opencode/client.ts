@@ -35,11 +35,12 @@ export function getClient(): OpencodeClient | null {
  * Promise with timeout wrapper
  */
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
   return Promise.race([
-    promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error('Request timed out')), timeoutMs)
-    ),
+    promise.finally(() => clearTimeout(timer)),
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Request timed out')), timeoutMs);
+    }),
   ]);
 }
 
@@ -384,21 +385,33 @@ export async function subscribeToEvents(
   
   try {
     const eventStream = await client!.event.subscribe();
+    let closed = false;
     
     // Process events asynchronously
     (async () => {
       try {
         for await (const event of eventStream.stream) {
+          if (closed) break;
           onEvent(event as { type: string; properties: Record<string, unknown> });
         }
       } catch (err) {
-        onError?.(err instanceof Error ? err : new Error(String(err)));
+        if (!closed) {
+          onError?.(err instanceof Error ? err : new Error(String(err)));
+        }
       }
     })();
     
-    // Return cleanup function
+    // Return cleanup function that signals the loop to stop
     return () => {
-      // The stream will close when iteration stops
+      closed = true;
+      // Close the underlying stream controller if available
+      try {
+        if (eventStream && typeof (eventStream as any).controller?.abort === 'function') {
+          (eventStream as any).controller.abort();
+        }
+      } catch {
+        // Best effort cleanup
+      }
     };
   } catch (err) {
     onError?.(err instanceof Error ? err : new Error(String(err)));

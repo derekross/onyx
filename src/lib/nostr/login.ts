@@ -132,7 +132,10 @@ export function importNsecLogin(key: string): { identity: NostrIdentity; login: 
     }
     sk = decoded.data;
   } else {
-    // Assume hex
+    // Validate hex format (must be 64 hex characters = 32 bytes)
+    if (!/^[0-9a-f]{64}$/i.test(key)) {
+      throw new Error('Invalid private key: must be a 64-character hex string or nsec');
+    }
     sk = hexToBytes(key);
   }
 

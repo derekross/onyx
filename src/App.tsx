@@ -28,6 +28,7 @@ import { onOpenUrl, getCurrent as getDeepLinkCurrent } from '@tauri-apps/plugin-
 import { readText } from '@tauri-apps/plugin-clipboard-manager';
 import { getSyncEngine, getCurrentLogin } from './lib/nostr';
 import { getSignerFromStoredLogin } from './lib/nostr/signer';
+import { sanitizeFilePath } from './lib/security';
 import { buildNoteIndex, resolveWikilink, NoteIndex, FileEntry, NoteGraph, buildNoteGraph } from './lib/editor/note-index';
 import { openDailyNote, loadDailyNotesConfig } from './lib/daily-notes';
 import { listTemplates, getTemplateContent, createNoteFromTemplate, loadTemplatesConfig, type TemplateInfo } from './lib/templates';
@@ -601,7 +602,7 @@ const App: Component = () => {
     }
     
     const title = params.get('title') || 'Untitled';
-    const path = params.get('path') || 'Clippings';
+    const path = sanitizeFilePath(params.get('path') || 'Clippings');
     const useClipboard = params.has('clipboard');
     let filename = params.get('filename') || `${sanitizeFilename(title)}.md`;
     
@@ -677,8 +678,9 @@ const App: Component = () => {
       return;
     }
     
-    const fullPath = path.startsWith(vault) ? path : `${vault}/${path}`;
-    await openFile(fullPath);
+    // Sanitize path to prevent directory traversal
+    const safePath = path.startsWith(vault) ? path : `${vault}/${sanitizeFilePath(path)}`;
+    await openFile(safePath);
   };
 
   // Sanitize filename for saving
@@ -1161,12 +1163,17 @@ const App: Component = () => {
     const idx = activeTabIndex();
     if (idx < 0) return;
 
+    const tabPath = tabs()[idx]?.path;
     setTabs(tabs().map((t, i) => i === idx ? { ...t, content, isDirty: true } : t));
 
     // Auto-save after 2 seconds of no typing
+    // Capture path instead of index to avoid saving to wrong tab if tabs change
     if (autoSaveTimeout) clearTimeout(autoSaveTimeout);
     autoSaveTimeout = window.setTimeout(() => {
-      saveTab(idx);
+      if (tabPath) {
+        const currentIdx = tabs().findIndex(t => t.path === tabPath);
+        if (currentIdx >= 0) saveTab(currentIdx);
+      }
     }, 2000);
   };
 

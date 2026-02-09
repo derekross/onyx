@@ -344,13 +344,7 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
           // Note: Question handling is done via the 'question.asked' event, not here.
           // The 'message.part.updated' event for the question tool doesn't contain
           // the proper requestId needed to respond to questions.
-
-          // Clear question if it was completed/errored
-          if (toolName === 'question' && (toolStatus === 'completed' || toolStatus === 'error')) {
-            setActiveQuestion(null);
-            setSelectedAnswers(new Set<string>());
-            setCustomAnswer('');
-          }
+          // Question clearing is handled by 'question.replied' / 'question.rejected' events.
           
           setActiveTools(prev => {
             // Remove completed/error tools, update or add others
@@ -670,11 +664,11 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
       }
       
       case 'permission.replied': {
-        // Permission was answered, clear both
-        setActiveQuestion(null);
-        setSelectedAnswers(new Set<string>());
-        setCustomAnswer('');
-        setActivePermission(null);
+        const permReplyEvent = event.properties as { sessionID?: string };
+        // Only clear for our session
+        if (!permReplyEvent.sessionID || permReplyEvent.sessionID === currentSessionId) {
+          setActivePermission(null);
+        }
         break;
       }
       
@@ -688,14 +682,22 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
     }
   };
 
+  let reconnectAttempts = 0;
   const handleEventError = (err: Error) => {
     console.error('Event stream error:', err);
-    // Try to reconnect
+    // Reconnect with exponential backoff (2s, 4s, 8s, 16s, max 30s)
+    const delay = Math.min(2000 * Math.pow(2, reconnectAttempts), 30000);
+    reconnectAttempts++;
     setTimeout(async () => {
       if (session()) {
-        eventCleanup = await subscribeToEvents(handleServerEvent, handleEventError);
+        try {
+          eventCleanup = await subscribeToEvents(handleServerEvent, handleEventError);
+          reconnectAttempts = 0; // Reset on successful reconnect
+        } catch {
+          handleEventError(new Error('Reconnection failed'));
+        }
       }
-    }, 2000);
+    }, delay);
   };
 
   // Strip context from a message's text parts
