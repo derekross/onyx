@@ -40,6 +40,48 @@ interface SearchResult {
   matches: { line: number; content: string }[];
 }
 
+interface FileTypeInfo {
+  icon: string;
+  badge: string | null;
+  displayName: string;
+}
+
+const IMAGE_EXTENSIONS = new Set(['avif', 'bmp', 'gif', 'jpeg', 'jpg', 'png', 'svg', 'webp']);
+const DOCUMENT_EXTENSIONS: Record<string, string> = {
+  pdf: 'PDF',
+  docx: 'DOCX',
+  xlsx: 'XLSX',
+  pptx: 'PPTX',
+};
+
+function getFileTypeInfo(name: string, isDirectory: boolean): FileTypeInfo {
+  if (isDirectory) {
+    return { icon: '', badge: null, displayName: name };
+  }
+
+  const dotIndex = name.lastIndexOf('.');
+  if (dotIndex === -1) {
+    return { icon: '', badge: null, displayName: name };
+  }
+
+  const ext = name.substring(dotIndex + 1).toLowerCase();
+  const baseName = name.substring(0, dotIndex);
+
+  if (ext === 'md') {
+    return { icon: '', badge: null, displayName: baseName };
+  }
+
+  if (IMAGE_EXTENSIONS.has(ext)) {
+    return { icon: '', badge: ext.toUpperCase(), displayName: baseName };
+  }
+
+  if (ext in DOCUMENT_EXTENSIONS) {
+    return { icon: '', badge: DOCUMENT_EXTENSIONS[ext], displayName: baseName };
+  }
+
+  return { icon: '', badge: ext.toUpperCase(), displayName: baseName };
+}
+
 const Sidebar: Component<SidebarProps> = (props) => {
   const [files, setFiles] = createSignal<FileEntry[]>([]);
   // Use external expanded folders state if provided, otherwise use internal state
@@ -479,6 +521,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
     const isBeingRenamed = () => isRenaming() === itemProps.entry.path;
     const isDragging = () => draggedItem() === itemProps.entry.path;
     const isDropTarget = () => dropTarget() === itemProps.entry.path;
+    const typeInfo = () => getFileTypeInfo(itemProps.entry.name, itemProps.entry.isDirectory);
 
     return (
       <>
@@ -519,7 +562,10 @@ const Sidebar: Component<SidebarProps> = (props) => {
               />
             }
           >
-            <span>{itemProps.entry.name.replace(/\.md$/i, '')}</span>
+            <span class="file-name">{typeInfo().displayName}</span>
+            <Show when={typeInfo().badge}>
+              <span class="file-type-badge">{typeInfo().badge}</span>
+            </Show>
           </Show>
         </div>
         <Show when={itemProps.entry.isDirectory && isExpanded()}>

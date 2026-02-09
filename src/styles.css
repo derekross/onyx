@@ -265,6 +265,38 @@ body {
   cursor: grabbing;
 }
 
+.file-tree-item .file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.file-type-badge {
+  margin-left: auto;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  opacity: 0.7;
+}
+
+.file-tree-item:hover .file-type-badge {
+  opacity: 1;
+}
+
+.file-tree-item.active .file-type-badge {
+  background: rgba(255, 255, 255, 0.2);
+  color: var(--accent-text);
+  opacity: 1;
+}
+
 .sidebar-content.drop-target {
   background: rgba(0, 120, 212, 0.1);
   border: 2px dashed var(--accent);
@@ -1091,6 +1123,297 @@ body {
 .graph-container {
   flex: 1;
   min-height: 200px;
+}
+
+/* File Viewers */
+.file-viewer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.image-viewer {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 24px;
+  background: var(--bg-secondary);
+}
+
+.image-viewer img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+}
+
+.pdf-viewer {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.pdf-viewer iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+/* Shared viewer states */
+.viewer-loading,
+.viewer-error {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  font-size: 14px;
+  padding: 24px;
+}
+
+.viewer-error {
+  color: var(--error, #e53935);
+}
+
+/* DOCX Viewer */
+.docx-viewer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.docx-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 32px 48px;
+  max-width: 800px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.docx-content h1 { font-size: 28px; font-weight: 700; margin: 24px 0 12px; }
+.docx-content h2 { font-size: 22px; font-weight: 600; margin: 20px 0 10px; }
+.docx-content h3 { font-size: 18px; font-weight: 600; margin: 16px 0 8px; }
+.docx-content h4 { font-size: 16px; font-weight: 600; margin: 14px 0 6px; }
+.docx-content p { margin: 8px 0; }
+.docx-content ul, .docx-content ol { margin: 8px 0; padding-left: 24px; }
+.docx-content li { margin: 4px 0; }
+
+.docx-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+}
+
+.docx-content th,
+.docx-content td {
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.docx-content th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+}
+
+.docx-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  margin: 8px 0;
+}
+
+/* XLSX Viewer */
+.xlsx-viewer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.xlsx-sheet-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 0 8px;
+  background: var(--bg-secondary);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.xlsx-sheet-tab {
+  padding: 8px 16px;
+  font-size: 13px;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+
+.xlsx-sheet-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.xlsx-sheet-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 500;
+}
+
+.xlsx-table-container {
+  flex: 1;
+  overflow: auto;
+  padding: 0;
+}
+
+.xlsx-table {
+  border-collapse: collapse;
+  font-size: 13px;
+  white-space: nowrap;
+  min-width: 100%;
+}
+
+.xlsx-table th,
+.xlsx-table td {
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  text-align: left;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.xlsx-table th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.xlsx-table tbody tr:hover {
+  background: var(--bg-tertiary);
+}
+
+.xlsx-row-number {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-align: center;
+  width: 40px;
+  min-width: 40px;
+  background: var(--bg-secondary);
+  user-select: none;
+}
+
+/* PPTX Viewer */
+.pptx-viewer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pptx-slides {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  align-items: center;
+  background: var(--bg-secondary);
+}
+
+.pptx-slide-wrapper {
+  width: 100%;
+  max-width: 900px;
+  flex-shrink: 0;
+}
+
+.pptx-slide-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+  padding-left: 2px;
+}
+
+.pptx-slide-canvas {
+  position: relative;
+  width: 100%;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
+}
+
+.pptx-slide-inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.pptx-element {
+  position: absolute;
+  overflow: hidden;
+}
+
+.pptx-element-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.pptx-text-line {
+  margin: 0;
+  line-height: 1.3;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.pptx-slide-notes {
+  margin-top: 8px;
+  padding: 12px 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.pptx-notes-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.pptx-note-text {
+  margin: 0 0 4px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.pptx-note-text:last-child {
+  margin-bottom: 0;
 }
 
 /* Welcome Screen */

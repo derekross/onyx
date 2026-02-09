@@ -197,6 +197,19 @@ const IMAGE_EXTENSIONS: &[&str] = &["avif", "bmp", "gif", "jpeg", "jpg", "png", 
 const AUDIO_EXTENSIONS: &[&str] = &["flac", "m4a", "mp3", "ogg", "wav", "webm", "3gp"];
 const VIDEO_EXTENSIONS: &[&str] = &["mkv", "mov", "mp4", "ogv", "webm"];
 const PDF_EXTENSIONS: &[&str] = &["pdf"];
+const DOCUMENT_EXTENSIONS: &[&str] = &["docx", "xlsx", "pptx"];
+
+fn is_viewable_extension(name: &str) -> bool {
+    let name_lower = name.to_lowercase();
+    if let Some(dot_pos) = name_lower.rfind('.') {
+        let ext = &name_lower[dot_pos + 1..];
+        IMAGE_EXTENSIONS.contains(&ext)
+            || PDF_EXTENSIONS.contains(&ext)
+            || DOCUMENT_EXTENSIONS.contains(&ext)
+    } else {
+        false
+    }
+}
 
 fn is_embeddable_extension(ext: &str) -> bool {
     let ext_lower = ext.to_lowercase();
@@ -245,8 +258,8 @@ fn build_file_tree(path: &Path) -> Vec<FileEntry> {
 
             let is_dir = item_path.is_dir();
 
-            // Only include markdown files and directories
-            if !is_dir && !name.ends_with(".md") {
+            // Only include markdown files, viewable files (images, PDFs, documents), and directories
+            if !is_dir && !name.ends_with(".md") && !is_viewable_extension(&name) {
                 continue;
             }
 
@@ -2082,6 +2095,9 @@ pub fn run() {
                         Some("mov") => "video/quicktime",
                         Some("ogv") => "video/ogg",
                         Some("pdf") => "application/pdf",
+                        Some("docx") => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        Some("xlsx") => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        Some("pptx") => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
                         _ => "application/octet-stream",
                     };
                     tauri::http::Response::builder()

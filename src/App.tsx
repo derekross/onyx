@@ -16,11 +16,14 @@ import SharedDocPreview from './components/SharedDocPreview';
 import SentSharesPanel from './components/SentSharesPanel';
 import FileInfoDialog from './components/FileInfoDialog';
 import PostToNostrDialog from './components/PostToNostrDialog';
+import DocxViewer from './components/DocxViewer';
+import XlsxViewer from './components/XlsxViewer';
+import PptxViewer from './components/PptxViewer';
 import Onboarding, { type OnboardingResult } from './components/Onboarding';
 import { MobileHeader, MobileNav, MobileDrawer, type MobileNavTab } from './components/mobile';
 import { initPlatform, usePlatformInfo } from './lib/platform';
 import { impactLight, impactMedium, notificationSuccess, notificationError } from './lib/haptics';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { onBackButtonPress } from '@tauri-apps/api/app';
 import { writeTextFile, mkdir, exists } from '@tauri-apps/plugin-fs';
@@ -36,11 +39,26 @@ import { HeadingInfo } from './lib/editor/heading-plugin';
 import { AssetIndex, AssetEntry, buildAssetIndex } from './lib/editor/asset-index';
 import type { SharedDocument, SentShare, Vault } from './lib/nostr/types';
 
+type FileType = 'markdown' | 'image' | 'pdf' | 'docx' | 'xlsx' | 'pptx';
+
+const IMAGE_EXTENSIONS = new Set(['avif', 'bmp', 'gif', 'jpeg', 'jpg', 'png', 'svg', 'webp']);
+const DOCUMENT_TYPE_MAP: Record<string, FileType> = {
+  pdf: 'pdf', docx: 'docx', xlsx: 'xlsx', pptx: 'pptx',
+};
+
+function getFileType(path: string): FileType {
+  const ext = path.split('.').pop()?.toLowerCase() || '';
+  if (IMAGE_EXTENSIONS.has(ext)) return 'image';
+  if (ext in DOCUMENT_TYPE_MAP) return DOCUMENT_TYPE_MAP[ext];
+  return 'markdown';
+}
+
 interface Tab {
   path: string;
   name: string;
   content: string;
   isDirty: boolean;
+  fileType: FileType;
 }
 
 interface AppSettings {
@@ -377,6 +395,38 @@ const App: Component = () => {
         }
         // Process any deep links that arrived before vault was ready
         processPendingDeepLinks();
+        
+        // Restore tabs from session
+        if (session?.tabs?.length) {
+          const restoredTabs: Tab[] = [];
+          for (const savedTab of session.tabs) {
+            const fileType = getFileType(savedTab.path);
+            if (fileType === 'markdown') {
+              try {
+                const content = await invoke<string>('read_file', { path: savedTab.path });
+                restoredTabs.push({ path: savedTab.path, name: savedTab.name, content, isDirty: false, fileType });
+              } catch {
+                // File may have been deleted or moved -- skip it
+              }
+            } else {
+              // Non-markdown files don't need content
+              try {
+                const exists = await invoke<boolean>('file_exists', { path: savedTab.path });
+                if (exists) {
+                  restoredTabs.push({ path: savedTab.path, name: savedTab.name, content: '', isDirty: false, fileType });
+                }
+              } catch {
+                // Skip if we can't verify existence
+              }
+            }
+          }
+          if (restoredTabs.length > 0) {
+            setTabs(restoredTabs);
+            // Restore active tab index, clamping to valid range
+            const savedIndex = session.activeTabIndex ?? -1;
+            setActiveTabIndex(savedIndex >= 0 && savedIndex < restoredTabs.length ? savedIndex : restoredTabs.length - 1);
+          }
+        }
       }
       if (settings.show_terminal) {
         setShowTerminal(true);
@@ -433,7 +483,7 @@ const App: Component = () => {
 
       for (const modifiedPath of modifiedPaths) {
         const tabIndex = currentTabs.findIndex(tab => tab.path === modifiedPath);
-        if (tabIndex !== -1) {
+        if (tabIndex !== -1 && currentTabs[tabIndex].fileType === 'markdown') {
           try {
             const newContent = await invoke<string>('read_file', { path: modifiedPath });
             const tab = currentTabs[tabIndex];
@@ -1067,7 +1117,7 @@ const App: Component = () => {
   // Sync status for status bar
   const [syncStatus, setSyncStatus] = createSignal<'off' | 'idle' | 'syncing' | 'error'>('off');
 
-  const openFile = async (path: string, line?: number) => {
+   const openFile = async (path: string, line?: number) => {
     // Check if already open
     const existingIndex = tabs().findIndex(t => t.path === path);
     if (existingIndex >= 0) {
@@ -1079,15 +1129,26 @@ const App: Component = () => {
       return;
     }
 
-    // Load file content
+    // Determine file type from extension
+    const fileType = getFileType(path);
+
+    // Handle both Unix (/) and Windows (\) path separators
+    const parts = path.split(/[/\\]/);
+    const fileName = parts[parts.length - 1] || 'Untitled';
+    const name = fileType === 'markdown' ? fileName.replace(/\.md$/i, '') : fileName.replace(/\.[^.]+$/, '');
+
+    // Non-markdown files are read-only viewers -- no text content needed
+    if (fileType !== 'markdown') {
+      setTabs([...tabs(), { path, name, content: '', isDirty: false, fileType }]);
+      setActiveTabIndex(tabs().length);
+      return;
+    }
+
+    // Load markdown file content
     try {
       const content = await invoke<string>('read_file', { path });
-      // Strip .md extension for display name
-      // Handle both Unix (/) and Windows (\) path separators
-      const parts = path.split(/[/\\]/);
-      const name = (parts[parts.length - 1] || 'Untitled').replace(/\.md$/i, '');
 
-      setTabs([...tabs(), { path, name, content, isDirty: false }]);
+      setTabs([...tabs(), { path, name, content, isDirty: false, fileType }]);
       setActiveTabIndex(tabs().length); // Will be the new last index after state updates
 
       // Set line to scroll to after editor loads
@@ -1772,10 +1833,11 @@ const App: Component = () => {
       if (downloadedCount > 0) {
         refreshSidebar?.();
         
-        // Reload any open tabs that may have been updated
+        // Reload any open markdown tabs that may have been updated
         const currentTabs = tabs();
         for (let i = 0; i < currentTabs.length; i++) {
           const tab = currentTabs[i];
+          if (tab.fileType !== 'markdown') continue;
           try {
             const newContent = await invoke<string>('read_file', { path: tab.path });
             if (newContent !== tab.content) {
@@ -1824,7 +1886,7 @@ const App: Component = () => {
       if (existingIndex >= 0) {
         setActiveTabIndex(existingIndex);
       } else {
-        setTabs([...tabs(), { path, name, content, isDirty: false }]);
+        setTabs([...tabs(), { path, name, content, isDirty: false, fileType: 'markdown' }]);
         setActiveTabIndex(tabs().length);
       }
       
@@ -1877,7 +1939,7 @@ const App: Component = () => {
       const content = await invoke<string>('read_file', { path: notePath });
       const name = notePath.split('/').pop() || noteName;
       
-      setTabs([...tabs(), { path: notePath, name, content, isDirty: false }]);
+      setTabs([...tabs(), { path: notePath, name, content, isDirty: false, fileType: 'markdown' }]);
       setActiveTabIndex(tabs().length);
       setShowTemplatesModal(false);
       
@@ -2131,6 +2193,8 @@ const App: Component = () => {
             onShareFile={handleShareFile}
             onFileInfo={handleFileInfo}
             onPostToNostr={handlePostToNostr}
+            expandedFolders={expandedFolders()}
+            onExpandedFoldersChange={setExpandedFolders}
           />
         </MobileDrawer>
       </Show>
@@ -2291,6 +2355,8 @@ const App: Component = () => {
             onShareFile={handleShareFile}
             onFileInfo={handleFileInfo}
             onPostToNostr={handlePostToNostr}
+            expandedFolders={expandedFolders()}
+            onExpandedFoldersChange={setExpandedFolders}
           />
         </div>
         <div
@@ -2356,48 +2422,80 @@ const App: Component = () => {
 
         {/* Editor + Terminal horizontal layout */}
         <div class="content-area">
-          {/* Editor or Graph View */}
+          {/* Editor, Viewer, or Graph View */}
           <div class="editor-area">
-            <Show when={showGraphView()} fallback={
-              <Editor
-                content={currentTab()?.content || ''}
-                onContentChange={updateTabContent}
-                filePath={currentTab()?.path || null}
-                vaultPath={vaultPath()}
-                onCreateFile={createNewNote}
-                onOpenVault={openVault}
-                onHashtagClick={handleHashtagClick}
-                scrollToLine={scrollToLine()}
-                onScrollComplete={() => setScrollToLine(null)}
-                onWikilinkClick={handleWikilinkClick}
-                noteIndex={noteIndex()}
-                assetIndex={assetIndex()}
-                fileContents={fileContents()}
-                onHeadingsChange={setCurrentHeadings}
-                onActiveHeadingChange={setActiveHeadingId}
-                scrollToHeadingId={scrollToHeadingId()}
-                scrollToHeadingText={scrollToHeadingText()}
-                scrollToBlockId={scrollToBlockId()}
-                viewMode={editorViewMode()}
-                onFilesUploaded={async () => {
-                  // Rebuild asset index after files are uploaded
-                  if (vaultPath()) {
-                    try {
-                      const assets = await invoke<AssetEntry[]>('list_assets', { path: vaultPath() });
-                      setAssetIndex(buildAssetIndex(assets, vaultPath()!));
-                    } catch (err) {
-                      console.error('Failed to rebuild asset index after upload:', err);
+            <Show when={currentTab()?.fileType && currentTab()!.fileType !== 'markdown'} fallback={
+              <Show when={showGraphView()} fallback={
+                <Editor
+                  content={currentTab()?.content || ''}
+                  onContentChange={updateTabContent}
+                  filePath={currentTab()?.path || null}
+                  vaultPath={vaultPath()}
+                  onCreateFile={createNewNote}
+                  onOpenVault={openVault}
+                  onHashtagClick={handleHashtagClick}
+                  scrollToLine={scrollToLine()}
+                  onScrollComplete={() => setScrollToLine(null)}
+                  onWikilinkClick={handleWikilinkClick}
+                  noteIndex={noteIndex()}
+                  assetIndex={assetIndex()}
+                  fileContents={fileContents()}
+                  onHeadingsChange={setCurrentHeadings}
+                  onActiveHeadingChange={setActiveHeadingId}
+                  scrollToHeadingId={scrollToHeadingId()}
+                  scrollToHeadingText={scrollToHeadingText()}
+                  scrollToBlockId={scrollToBlockId()}
+                  viewMode={editorViewMode()}
+                  onFilesUploaded={async () => {
+                    // Rebuild asset index after files are uploaded
+                    if (vaultPath()) {
+                      try {
+                        const assets = await invoke<AssetEntry[]>('list_assets', { path: vaultPath() });
+                        setAssetIndex(buildAssetIndex(assets, vaultPath()!));
+                      } catch (err) {
+                        console.error('Failed to rebuild asset index after upload:', err);
+                      }
                     }
-                  }
-                }}
-              />
+                  }}
+                />
+              }>
+                <GraphView
+                  vaultPath={vaultPath()}
+                  noteIndex={noteIndex()}
+                  currentFile={currentTab()?.path || null}
+                  onNodeClick={(path) => { setShowGraphView(false); openFile(path); }}
+                />
+              </Show>
             }>
-              <GraphView
-                vaultPath={vaultPath()}
-                noteIndex={noteIndex()}
-                currentFile={currentTab()?.path || null}
-                onNodeClick={(path) => { setShowGraphView(false); openFile(path); }}
-              />
+              {/* File viewer for non-markdown files */}
+              <div class="file-viewer">
+                <Show when={currentTab()?.fileType === 'image'}>
+                  <div class="image-viewer">
+                    <img
+                      src={convertFileSrc(currentTab()!.path)}
+                      alt={currentTab()!.name}
+                      draggable={false}
+                    />
+                  </div>
+                </Show>
+                <Show when={currentTab()?.fileType === 'pdf'}>
+                  <div class="pdf-viewer">
+                    <iframe
+                      src={convertFileSrc(currentTab()!.path)}
+                      title={currentTab()!.name}
+                    />
+                  </div>
+                </Show>
+                <Show when={currentTab()?.fileType === 'docx'}>
+                  <DocxViewer path={currentTab()!.path} />
+                </Show>
+                <Show when={currentTab()?.fileType === 'xlsx'}>
+                  <XlsxViewer path={currentTab()!.path} />
+                </Show>
+                <Show when={currentTab()?.fileType === 'pptx'}>
+                  <PptxViewer path={currentTab()!.path} />
+                </Show>
+              </div>
             </Show>
           </div>
 
