@@ -341,10 +341,16 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
           const toolName = part.tool;
           const title = part.state?.title;
           
-          // Note: Question handling is done via the 'question.asked' event, not here.
-          // The 'message.part.updated' event for the question tool doesn't contain
-          // the proper requestId needed to respond to questions.
-          // Question clearing is handled by 'question.replied' / 'question.rejected' events.
+          // Don't show the "question" tool in the active tools spinner.
+          // Questions are handled via 'question.asked' / 'permission.updated' events
+          // and rendered as an interactive UI, not a tool spinner.
+          if (toolName === 'question') {
+            // If the question tool completes or errors, remove any stale spinner
+            if (toolStatus === 'completed' || toolStatus === 'error') {
+              setActiveTools(prev => prev.filter(t => t.id !== toolId));
+            }
+            break;
+          }
           
           setActiveTools(prev => {
             // Remove completed/error tools, update or add others
@@ -461,12 +467,17 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
       
       case 'session.error': {
         const errorMsg = (event.properties?.error || event.properties?.message) as string | undefined;
+        console.error('[Chat] session.error:', JSON.stringify(event.properties));
         if (!eventSessionId || eventSessionId === currentSessionId) {
           setIsStreaming(false);
           setIsLoading(false);
           setActiveTools([]);
           setSessionStatus(null);
-          setError(errorMsg || 'An error occurred');
+          if (errorMsg) {
+            setError(errorMsg);
+          }
+          // Refresh messages to show whatever completed before the error
+          refreshMessages();
         }
         break;
       }
@@ -494,6 +505,7 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
         
         // Check if this is a question (from the question tool)
         const metadata = permission.metadata || {};
+        console.log('[Chat] permission.updated:', permission.id, 'session:', permission.sessionID, 'hasQuestions:', !!(metadata.questions));
         const questions = metadata.questions as Array<{
           question?: string;
           header?: string;
@@ -624,13 +636,18 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
           }>;
         };
 
+        console.log('[Chat] question.asked event:', questionRequest.id, 'session:', questionRequest.sessionID, 'questions:', questionRequest.questions?.length);
+
         // Only handle questions for our session
-        if (questionRequest.sessionID !== currentSessionId) break;
+        if (questionRequest.sessionID !== currentSessionId) {
+          console.log('[Chat] question.asked ignored: session mismatch (got:', questionRequest.sessionID, 'expected:', currentSessionId, ')');
+          break;
+        }
 
         const questions = questionRequest.questions;
         if (questions && questions.length > 0) {
           const q = questions[0]; // Handle first question
-          setActiveQuestion({
+          const questionData = {
             requestId: questionRequest.id || '',
             sessionId: questionRequest.sessionID || '',
             header: q.header,
@@ -641,9 +658,13 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
             })),
             multiple: q.multiple,
             custom: true, // Default to allowing custom input
-          });
+          };
+          console.log('[Chat] Setting activeQuestion:', questionData.question, 'options:', questionData.options.length);
+          setActiveQuestion(questionData);
           setSelectedAnswers(new Set<string>());
           setCustomAnswer('');
+        } else {
+          console.log('[Chat] question.asked: no questions in payload');
         }
         break;
       }
@@ -655,6 +676,7 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
           sessionID?: string;
           requestID?: string;
         };
+        console.log('[Chat]', event.type, '- clearing question UI, session:', questionEvent.sessionID);
         if (questionEvent.sessionID === currentSessionId) {
           setActiveQuestion(null);
           setSelectedAnswers(new Set<string>());
@@ -684,7 +706,12 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
 
   let reconnectAttempts = 0;
   const handleEventError = (err: Error) => {
-    console.error('Event stream error:', err);
+    // Suppress noisy AggregateError logs from SSE stream drops
+    if (err.message === 'AggregateError' || err.name === 'AggregateError') {
+      console.warn('[Chat] SSE stream dropped, reconnecting...');
+    } else {
+      console.error('Event stream error:', err);
+    }
     // Reconnect with exponential backoff (2s, 4s, 8s, 16s, max 30s)
     const delay = Math.min(2000 * Math.pow(2, reconnectAttempts), 30000);
     reconnectAttempts++;
@@ -693,6 +720,8 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
         try {
           eventCleanup = await subscribeToEvents(handleServerEvent, handleEventError);
           reconnectAttempts = 0; // Reset on successful reconnect
+          // Refresh messages to catch up on anything missed during disconnect
+          await refreshMessages();
         } catch {
           handleEventError(new Error('Reconnection failed'));
         }

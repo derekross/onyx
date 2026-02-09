@@ -1551,15 +1551,25 @@ fn start_watching(
     let watcher = RecommendedWatcher::new(
         move |res: Result<notify::Event, notify::Error>| {
             if let Ok(event) = res {
-                // Only emit for create, modify, remove events on .md files
+                // Emit for create, modify, remove events on .md files, viewable files, or directories
                 let dominated_by_md = event
                     .paths
                     .iter()
                     .any(|p| p.extension().map(|e| e == "md").unwrap_or(false));
 
+                let dominated_by_viewable = event
+                    .paths
+                    .iter()
+                    .any(|p| {
+                        p.file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|n| is_viewable_extension(n))
+                            .unwrap_or(false)
+                    });
+
                 let dominated_by_dir = event.paths.iter().any(|p| p.is_dir());
 
-                if dominated_by_md || dominated_by_dir {
+                if dominated_by_md || dominated_by_viewable || dominated_by_dir {
                     match event.kind {
                         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
                             let _ = app_clone.emit("files-changed", ());

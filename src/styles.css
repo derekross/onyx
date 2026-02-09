@@ -2831,6 +2831,9 @@ body {
   border: 1px solid var(--accent);
   border-radius: 12px;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
 }
 
 .chat-question-header {
@@ -2842,10 +2845,14 @@ body {
   color: var(--accent);
   font-weight: 600;
   font-size: 14px;
+  flex-shrink: 0;
 }
 
 .chat-question-body {
   padding: 16px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .chat-question-body p {
