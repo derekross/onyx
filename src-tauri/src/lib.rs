@@ -1821,26 +1821,59 @@ fn skill_import_zip(zip_path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn fetch_skills_sh(limit: Option<u32>) -> Result<String, String> {
-    let limit = limit.unwrap_or(500); // Fetch up to 500 skills by default
-    let url = format!("https://skills.sh/api/skills?limit={}", limit);
-    
+async fn fetch_skills_sh(pages: Option<u32>) -> Result<String, String> {
+    let pages = pages.unwrap_or(3); // 3 pages x 200 skills = ~600 skills
     let client = reqwest::Client::new();
-    let response = client
-        .get(&url)
-        .timeout(Duration::from_secs(30))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch skills.sh: {}", e))?;
+    let mut all_skills = Vec::new();
 
-    if !response.status().is_success() {
-        return Err(format!("skills.sh returned status: {}", response.status()));
+    for page in 0..pages {
+        let url = format!("https://skills.sh/api/skills/all-time/{}", page);
+        let response = client
+            .get(&url)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch skills.sh page {}: {}", page, e))?;
+
+        if !response.status().is_success() {
+            return Err(format!("skills.sh returned status: {}", response.status()));
+        }
+
+        let text = response
+            .text()
+            .await
+            .map_err(|e| format!("Failed to read response: {}", e))?;
+
+        let page_data: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| format!("Failed to parse skills.sh response: {}", e))?;
+
+        if let Some(skills) = page_data.get("skills").and_then(|s| s.as_array()) {
+            for skill in skills {
+                // Remap new field names to old format for frontend compatibility:
+                // skillId -> id, source -> topSource
+                let remapped = serde_json::json!({
+                    "id": skill.get("skillId").or_else(|| skill.get("name")).unwrap_or(&serde_json::Value::Null),
+                    "name": skill.get("name").unwrap_or(&serde_json::Value::Null),
+                    "installs": skill.get("installs").unwrap_or(&serde_json::json!(0)),
+                    "topSource": skill.get("source").unwrap_or(&serde_json::Value::Null),
+                });
+                all_skills.push(remapped);
+            }
+        }
+
+        // Stop early if no more pages
+        let has_more = page_data.get("hasMore").and_then(|h| h.as_bool()).unwrap_or(false);
+        if !has_more {
+            break;
+        }
     }
 
-    response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response: {}", e))
+    let result = serde_json::json!({
+        "skills": all_skills,
+        "hasMore": false,
+    });
+
+    Ok(result.to_string())
 }
 
 #[tauri::command]
@@ -2032,6 +2065,172 @@ async fn openclaw_stream(
     // Signal end of stream
     let _ = app.emit(&event_name, "__DONE__");
     Ok(())
+}
+
+// OpenClaw Gateway WebSocket proxy
+// Connects, performs challenge/connect handshake, sends a request, returns the response.
+// Each call opens a fresh connection (lazy connect pattern for skills UI).
+#[tauri::command]
+async fn openclaw_gateway_request(
+    ws_url: String,
+    token: String,
+    method: String,
+    params: String,
+) -> Result<String, String> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    // Connect to the Gateway WebSocket
+    let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url)
+        .await
+        .map_err(|e| format!("WebSocket connect failed: {}", e))?;
+
+    let (mut write, mut read) = ws_stream.split();
+
+    // Step 1: Wait for connect.challenge event
+    let mut challenge_nonce: Option<String> = None;
+    let timeout = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(msg) = read.next().await {
+            if let Ok(Message::Text(text)) = msg {
+                if let Ok(frame) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if frame.get("type").and_then(|t| t.as_str()) == Some("event")
+                        && frame.get("event").and_then(|e| e.as_str()) == Some("connect.challenge")
+                    {
+                        challenge_nonce = frame
+                            .get("payload")
+                            .and_then(|p| p.get("nonce"))
+                            .and_then(|n| n.as_str())
+                            .map(|s| s.to_string());
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        Err("WebSocket closed before challenge".to_string())
+    })
+    .await;
+
+    match timeout {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(e),
+        Err(_) => return Err("Timeout waiting for challenge".to_string()),
+    }
+
+    // Step 2: Send connect request
+    let connect_id = uuid::Uuid::new_v4().to_string();
+    let connect_frame = serde_json::json!({
+        "type": "req",
+        "id": connect_id,
+        "method": "connect",
+        "params": {
+            "minProtocol": 3,
+            "maxProtocol": 3,
+            "client": {
+                "id": "gateway-client",
+                "displayName": "Onyx",
+                "version": "1.0.0",
+                "platform": std::env::consts::OS,
+                "mode": "ui"
+            },
+            "role": "operator",
+            "scopes": ["operator.admin"],
+            "caps": [],
+            "auth": {
+                "token": token
+            }
+        }
+    });
+
+    write
+        .send(Message::Text(connect_frame.to_string()))
+        .await
+        .map_err(|e| format!("Failed to send connect: {}", e))?;
+
+    // Step 3: Wait for hello-ok response
+    let timeout = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(msg) = read.next().await {
+            if let Ok(Message::Text(text)) = msg {
+                if let Ok(frame) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if frame.get("type").and_then(|t| t.as_str()) == Some("res")
+                        && frame.get("id").and_then(|i| i.as_str()) == Some(&connect_id)
+                    {
+                        let ok = frame.get("ok").and_then(|o| o.as_bool()).unwrap_or(false);
+                        if !ok {
+                            let err_msg = frame
+                                .get("error")
+                                .and_then(|e| e.get("message"))
+                                .and_then(|m| m.as_str())
+                                .unwrap_or("Connection rejected");
+                            return Err(format!("Gateway connect failed: {}", err_msg));
+                        }
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        Err("WebSocket closed during handshake".to_string())
+    })
+    .await;
+
+    match timeout {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(e),
+        Err(_) => return Err("Timeout during handshake".to_string()),
+    }
+
+    // Step 4: Send the actual request
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let params_value: serde_json::Value =
+        serde_json::from_str(&params).unwrap_or(serde_json::json!({}));
+
+    let request_frame = serde_json::json!({
+        "type": "req",
+        "id": request_id,
+        "method": method,
+        "params": params_value
+    });
+
+    write
+        .send(Message::Text(request_frame.to_string()))
+        .await
+        .map_err(|e| format!("Failed to send request: {}", e))?;
+
+    // Step 5: Wait for the response (skip events)
+    let timeout = tokio::time::timeout(Duration::from_secs(300), async {
+        while let Some(msg) = read.next().await {
+            if let Ok(Message::Text(text)) = msg {
+                if let Ok(frame) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if frame.get("type").and_then(|t| t.as_str()) == Some("res")
+                        && frame.get("id").and_then(|i| i.as_str()) == Some(&request_id)
+                    {
+                        let ok = frame.get("ok").and_then(|o| o.as_bool()).unwrap_or(false);
+                        if !ok {
+                            let err_msg = frame
+                                .get("error")
+                                .and_then(|e| e.get("message"))
+                                .and_then(|m| m.as_str())
+                                .unwrap_or("Request failed");
+                            return Err(format!("Gateway error: {}", err_msg));
+                        }
+                        let payload = frame.get("payload").cloned().unwrap_or(serde_json::json!({}));
+                        return Ok(payload.to_string());
+                    }
+                    // Skip events (tick, presence, etc.)
+                }
+            }
+        }
+        Err("WebSocket closed before response".to_string())
+    })
+    .await;
+
+    // Close the connection
+    let _ = write.send(Message::Close(None)).await;
+
+    match timeout {
+        Ok(Ok(payload)) => Ok(payload),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err("Timeout waiting for response".to_string()),
+    }
 }
 
 /// Get any deep link URLs passed as command line arguments
@@ -2257,6 +2456,7 @@ pub fn run() {
             get_deep_link_args,
             openclaw_request,
             openclaw_stream,
+            openclaw_gateway_request,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

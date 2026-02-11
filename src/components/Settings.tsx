@@ -39,6 +39,12 @@ import {
   type ProviderAuthInfo,
 } from '../lib/opencode/client';
 import {
+  getSkillsStatus,
+  updateSkill,
+  installSkill,
+  type SkillStatus,
+} from '../lib/openclaw/gateway';
+import {
   fetchSkillsShLeaderboard,
   searchSkillsSh,
   sortSkillsSh,
@@ -266,6 +272,67 @@ const Settings: Component<SettingsProps> = (props) => {
   const [openClawTokenVisible, setOpenClawTokenVisible] = createSignal(false);
   const [openClawTestStatus, setOpenClawTestStatus] = createSignal<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [openClawTestError, setOpenClawTestError] = createSignal<string | null>(null);
+
+  // OpenClaw Skills state
+  const [openClawSkillsTab, setOpenClawSkillsTab] = createSignal<'config' | 'skills'>('config');
+  const [openClawSkills, setOpenClawSkills] = createSignal<SkillStatus[]>([]);
+  const [openClawSkillsLoading, setOpenClawSkillsLoading] = createSignal(false);
+  const [openClawSkillsError, setOpenClawSkillsError] = createSignal<string | null>(null);
+  const [openClawSkillInstalling, setOpenClawSkillInstalling] = createSignal<string | null>(null);
+  const [openClawSkillToggling, setOpenClawSkillToggling] = createSignal<string | null>(null);
+  const [openClawSkillSearch, setOpenClawSkillSearch] = createSignal('');
+  const [viewingOpenClawSkill, setViewingOpenClawSkill] = createSignal<SkillStatus | null>(null);
+
+  const loadOpenClawSkills = async () => {
+    setOpenClawSkillsLoading(true);
+    setOpenClawSkillsError(null);
+    try {
+      const report = await getSkillsStatus();
+      setOpenClawSkills(report.skills);
+    } catch (err: any) {
+      setOpenClawSkillsError(err.message || err || 'Failed to fetch skills');
+    } finally {
+      setOpenClawSkillsLoading(false);
+    }
+  };
+
+  const handleOpenClawSkillToggle = async (skill: SkillStatus) => {
+    setOpenClawSkillToggling(skill.skillKey);
+    try {
+      await updateSkill({ skillKey: skill.skillKey, enabled: skill.disabled });
+      await loadOpenClawSkills(); // Refresh
+    } catch (err: any) {
+      setOpenClawSkillsError(err.message || 'Failed to update skill');
+    } finally {
+      setOpenClawSkillToggling(null);
+    }
+  };
+
+  const handleOpenClawSkillInstall = async (skill: SkillStatus, installOptionId: string) => {
+    setOpenClawSkillInstalling(skill.skillKey);
+    try {
+      const result = await installSkill(skill.name, installOptionId);
+      if (!result.ok) {
+        setOpenClawSkillsError(result.message || 'Install failed');
+      }
+      await loadOpenClawSkills(); // Refresh
+    } catch (err: any) {
+      setOpenClawSkillsError(err.message || 'Install failed');
+    } finally {
+      setOpenClawSkillInstalling(null);
+    }
+  };
+
+  const filteredOpenClawSkills = () => {
+    const query = openClawSkillSearch().toLowerCase();
+    const skills = openClawSkills();
+    if (!query) return skills;
+    return skills.filter(s =>
+      s.name.toLowerCase().includes(query) ||
+      s.description.toLowerCase().includes(query) ||
+      s.skillKey.toLowerCase().includes(query)
+    );
+  };
 
   const handleOpenClawUrlChange = (value: string) => {
     setOpenClawUrl(value);
@@ -1817,6 +1884,13 @@ const Settings: Component<SettingsProps> = (props) => {
     }
   });
 
+  // Auto-load OpenClaw skills when switching to skills tab
+  createEffect(() => {
+    if (openClawSkillsTab() === 'skills' && openClawUrl() && openClawToken() && openClawSkills().length === 0 && !openClawSkillsLoading()) {
+      loadOpenClawSkills();
+    }
+  });
+
   // Add/remove click outside listener
   createEffect(() => {
     if (modelDropdownOpen()) {
@@ -2936,6 +3010,23 @@ const Settings: Component<SettingsProps> = (props) => {
             {/* OpenClaw Settings */}
             <Show when={activeSection() === 'openclaw'}>
               <div class="settings-section">
+                {/* Tab bar */}
+                <div class="openclaw-tabs">
+                  <button
+                    class={`openclaw-tab ${openClawSkillsTab() === 'config' ? 'active' : ''}`}
+                    onClick={() => setOpenClawSkillsTab('config')}
+                  >
+                    Configuration
+                  </button>
+                  <button
+                    class={`openclaw-tab ${openClawSkillsTab() === 'skills' ? 'active' : ''}`}
+                    onClick={() => setOpenClawSkillsTab('skills')}
+                  >
+                    Skills
+                  </button>
+                </div>
+
+                <div style={{ display: openClawSkillsTab() === 'config' ? 'block' : 'none' }}>
                 <div class="settings-section-title">OpenClaw Configuration</div>
 
                 <div class="settings-notice">
@@ -3045,6 +3136,156 @@ const Settings: Component<SettingsProps> = (props) => {
                     <p>Connection failed: {openClawTestError()}</p>
                   </div>
                 </Show>
+                </div>
+
+                {/* Skills Tab */}
+                <div style={{ display: openClawSkillsTab() === 'skills' ? 'block' : 'none' }}>
+                  <Show when={!openClawUrl() || !openClawToken()}>
+                    <div class="settings-notice warning">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="8" x2="12" y2="12"></line>
+                        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                      </svg>
+                      <p>Configure your OpenClaw server URL and token first.</p>
+                    </div>
+                  </Show>
+
+                  <Show when={openClawUrl() && openClawToken()}>
+                    <Show when={openClawSkillsLoading()}>
+                      <div class="skills-loading">
+                        <div class="spinner"></div>
+                        <span>Loading skills...</span>
+                      </div>
+                    </Show>
+
+                    <Show when={openClawSkillsError()}>
+                      <div class="settings-notice warning">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                          <line x1="12" y1="9" x2="12" y2="13"></line>
+                          <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                        </svg>
+                        <p>{openClawSkillsError()}</p>
+                      </div>
+                      <button class="setting-button" onClick={loadOpenClawSkills}>Retry</button>
+                    </Show>
+
+                    <Show when={!openClawSkillsLoading() && !openClawSkillsError() && openClawSkills().length > 0}>
+                      {/* Search */}
+                      <div class="skills-search-bar">
+                        <div class="skills-search-input">
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                          </svg>
+                          <input
+                            type="text"
+                            placeholder="Search skills..."
+                            value={openClawSkillSearch()}
+                            onInput={(e) => setOpenClawSkillSearch(e.currentTarget.value)}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Skills list */}
+                      <div class="skills-list">
+                        <For each={filteredOpenClawSkills()}>
+                          {(skill) => (
+                            <div class={`skill-item ${!skill.disabled && skill.eligible ? 'enabled' : ''}`}>
+                              <div class="skill-icon">
+                                <Show when={skill.emoji} fallback={
+                                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>
+                                  </svg>
+                                }>
+                                  <span style={{ "font-size": "20px" }}>{skill.emoji}</span>
+                                </Show>
+                              </div>
+                              <div class="skill-info">
+                                <div class="skill-header">
+                                  <span class="skill-name">{skill.name}</span>
+                                  <Show when={!skill.eligible}>
+                                    <span class="skill-badge deps">Ineligible</span>
+                                  </Show>
+                                  <Show when={skill.missing.bins.length > 0}>
+                                    <button
+                                      class="skill-badge deps clickable"
+                                      onClick={() => setModalConfig({
+                                        type: 'info',
+                                        title: `${skill.name} - Missing Dependencies`,
+                                        message: `Missing binaries: ${skill.missing.bins.join(', ')}${skill.missing.env.length > 0 ? `\n\nMissing env vars: ${skill.missing.env.join(', ')}` : ''}${skill.install.length > 0 ? `\n\nInstall options:\n${skill.install.map(o => `  ${o.label} (${o.kind})`).join('\n')}` : ''}`
+                                      })}
+                                      title="Click to see missing dependencies"
+                                    >
+                                      Missing deps
+                                    </button>
+                                  </Show>
+                                  <Show when={skill.always}>
+                                    <span class="skill-badge installed">Always on</span>
+                                  </Show>
+                                </div>
+                                <p class="skill-description">{skill.description}</p>
+                                <span class="skill-category">{skill.source.replace('openclaw-', '')}</span>
+                                <Show when={skill.homepage}>
+                                  {' '}
+                                  <a class="openclaw-skill-link" href={skill.homepage!} target="_blank" rel="noopener noreferrer">docs</a>
+                                </Show>
+                              </div>
+                              <div class="skill-actions">
+                                <Show when={skill.missing.bins.length > 0 && skill.install.length > 0}>
+                                  <For each={skill.install}>
+                                    {(opt) => (
+                                      <button
+                                        class="setting-button small"
+                                        onClick={() => handleOpenClawSkillInstall(skill, opt.id)}
+                                        disabled={openClawSkillInstalling() === skill.skillKey}
+                                        title={`Install via ${opt.kind}: ${opt.label}`}
+                                      >
+                                        <Show when={openClawSkillInstalling() === skill.skillKey} fallback={
+                                          <>{opt.label}</>
+                                        }>
+                                          <div class="spinner small"></div>
+                                        </Show>
+                                      </button>
+                                    )}
+                                  </For>
+                                </Show>
+                                <button
+                                  class="skill-edit-btn"
+                                  onClick={() => setViewingOpenClawSkill(skill)}
+                                  title="View skill details"
+                                >
+                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                                  </svg>
+                                </button>
+                                <label class="setting-toggle"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    if (openClawSkillToggling() !== skill.skillKey) {
+                                      handleOpenClawSkillToggle(skill);
+                                    }
+                                  }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={!skill.disabled && skill.eligible}
+                                    readOnly
+                                    disabled={openClawSkillToggling() === skill.skillKey}
+                                  />
+                                  <span class="toggle-slider"></span>
+                                </label>
+                              </div>
+                            </div>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
+                  </Show>
+                </div>
               </div>
             </Show>
 
@@ -4100,6 +4341,142 @@ const Settings: Component<SettingsProps> = (props) => {
                     ) : 'Save'}
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        </Show>
+
+        {/* OpenClaw Skill Detail Modal */}
+        <Show when={viewingOpenClawSkill()}>
+          <div class="modal-overlay" onClick={() => setViewingOpenClawSkill(null)}>
+            <div class="modal-dialog skill-edit-modal" onClick={(e) => e.stopPropagation()}>
+              <div class="modal-header">
+                <h3>{viewingOpenClawSkill()!.emoji ? `${viewingOpenClawSkill()!.emoji} ` : ''}{viewingOpenClawSkill()!.name}</h3>
+                <button class="modal-close" onClick={() => setViewingOpenClawSkill(null)}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </div>
+              <div class="modal-body" style={{ "max-height": "60vh", "overflow-y": "auto" }}>
+                <p style={{ "margin-bottom": "16px" }}>{viewingOpenClawSkill()!.description}</p>
+
+                <div class="openclaw-detail-section">
+                  <div class="openclaw-detail-label">Status</div>
+                  <div class="openclaw-detail-value">
+                    <span class={`skill-badge ${viewingOpenClawSkill()!.disabled ? '' : 'installed'}`}>
+                      {viewingOpenClawSkill()!.disabled ? 'Disabled' : 'Enabled'}
+                    </span>
+                    {' '}
+                    <span class={`skill-badge ${viewingOpenClawSkill()!.eligible ? 'installed' : 'deps'}`}>
+                      {viewingOpenClawSkill()!.eligible ? 'Eligible' : 'Ineligible'}
+                    </span>
+                    <Show when={viewingOpenClawSkill()!.always}>
+                      {' '}<span class="skill-badge installed">Always on</span>
+                    </Show>
+                  </div>
+                </div>
+
+                <div class="openclaw-detail-section">
+                  <div class="openclaw-detail-label">Source</div>
+                  <div class="openclaw-detail-value">{viewingOpenClawSkill()!.source}</div>
+                </div>
+
+                <div class="openclaw-detail-section">
+                  <div class="openclaw-detail-label">Path</div>
+                  <div class="openclaw-detail-value" style={{ "font-family": "monospace", "font-size": "12px", "word-break": "break-all" }}>{viewingOpenClawSkill()!.filePath}</div>
+                </div>
+
+                <Show when={viewingOpenClawSkill()!.primaryEnv}>
+                  <div class="openclaw-detail-section">
+                    <div class="openclaw-detail-label">Primary Env</div>
+                    <div class="openclaw-detail-value"><code>{viewingOpenClawSkill()!.primaryEnv}</code></div>
+                  </div>
+                </Show>
+
+                <Show when={viewingOpenClawSkill()!.requirements.bins.length > 0}>
+                  <div class="openclaw-detail-section">
+                    <div class="openclaw-detail-label">Required Binaries</div>
+                    <div class="openclaw-detail-value">{viewingOpenClawSkill()!.requirements.bins.join(', ')}</div>
+                  </div>
+                </Show>
+
+                <Show when={viewingOpenClawSkill()!.missing.bins.length > 0}>
+                  <div class="openclaw-detail-section">
+                    <div class="openclaw-detail-label">Missing Binaries</div>
+                    <div class="openclaw-detail-value" style={{ color: '#e67e22' }}>{viewingOpenClawSkill()!.missing.bins.join(', ')}</div>
+                  </div>
+                </Show>
+
+                <Show when={viewingOpenClawSkill()!.requirements.env.length > 0}>
+                  <div class="openclaw-detail-section">
+                    <div class="openclaw-detail-label">Required Env Vars</div>
+                    <div class="openclaw-detail-value">{viewingOpenClawSkill()!.requirements.env.join(', ')}</div>
+                  </div>
+                </Show>
+
+                <Show when={viewingOpenClawSkill()!.missing.env.length > 0}>
+                  <div class="openclaw-detail-section">
+                    <div class="openclaw-detail-label">Missing Env Vars</div>
+                    <div class="openclaw-detail-value" style={{ color: '#e67e22' }}>{viewingOpenClawSkill()!.missing.env.join(', ')}</div>
+                  </div>
+                </Show>
+
+                <Show when={viewingOpenClawSkill()!.configChecks.length > 0}>
+                  <div class="openclaw-detail-section">
+                    <div class="openclaw-detail-label">Config Checks</div>
+                    <div class="openclaw-detail-value">
+                      <For each={viewingOpenClawSkill()!.configChecks}>
+                        {(check) => (
+                          <div style={{ "font-size": "12px", "margin-bottom": "4px" }}>
+                            <code>{check.path}</code>: {check.satisfied ? 'OK' : 'Not satisfied'}
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  </div>
+                </Show>
+
+                <Show when={viewingOpenClawSkill()!.install.length > 0}>
+                  <div class="openclaw-detail-section">
+                    <div class="openclaw-detail-label">Install Options</div>
+                    <div class="openclaw-detail-value">
+                      <For each={viewingOpenClawSkill()!.install}>
+                        {(opt) => (
+                          <div style={{ "display": "flex", "align-items": "center", "gap": "8px", "margin-bottom": "4px" }}>
+                            <span style={{ "font-size": "12px" }}>{opt.label} ({opt.kind})</span>
+                            <button
+                              class="setting-button small"
+                              onClick={() => {
+                                const skill = viewingOpenClawSkill()!;
+                                setViewingOpenClawSkill(null);
+                                handleOpenClawSkillInstall(skill, opt.id);
+                              }}
+                              disabled={openClawSkillInstalling() === viewingOpenClawSkill()!.skillKey}
+                            >
+                              Install
+                            </button>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  </div>
+                </Show>
+
+                <Show when={viewingOpenClawSkill()!.homepage}>
+                  <div class="openclaw-detail-section">
+                    <div class="openclaw-detail-label">Homepage</div>
+                    <div class="openclaw-detail-value">
+                      <a href={viewingOpenClawSkill()!.homepage!} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>
+                        {viewingOpenClawSkill()!.homepage}
+                      </a>
+                    </div>
+                  </div>
+                </Show>
+              </div>
+              <div class="modal-footer">
+                <button class="setting-button" onClick={() => setViewingOpenClawSkill(null)}>Close</button>
               </div>
             </div>
           </div>
