@@ -64,7 +64,7 @@ import {
   type TemplatesConfig,
 } from '../lib/templates';
 
-type SettingsSection = 'general' | 'editor' | 'files' | 'appearance' | 'hotkeys' | 'opencode' | 'productivity' | 'sync' | 'nostr' | 'about';
+type SettingsSection = 'general' | 'editor' | 'files' | 'appearance' | 'hotkeys' | 'opencode' | 'openclaw' | 'productivity' | 'sync' | 'nostr' | 'about';
 type LoginTab = 'generate' | 'import';
 
 interface SettingsProps {
@@ -115,6 +115,7 @@ const sections: SettingsSectionItem[] = [
   { id: 'appearance', label: 'Appearance', icon: 'M12 2v4 M12 18v4 M4.93 4.93l2.83 2.83 M16.24 16.24l2.83 2.83 M2 12h4 M18 12h4 M4.93 19.07l2.83-2.83 M16.24 7.76l2.83-2.83' },
   { id: 'hotkeys', label: 'Hotkeys', icon: 'M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z' },
   { id: 'opencode', label: 'OpenCode', icon: 'M8 9l3 3-3 3 M13 15h3 M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z' },
+  { id: 'openclaw', label: 'OpenClaw', icon: 'm175.656 22.375-48.47 82.094c-23.017 4.384-43.547 11.782-60.124 22.374-24.436 15.613-40.572 37.414-45.5 67.875-4.79 29.62 1.568 68.087 24.125 116.093 93.162 22.88 184.08-10.908 257.25-18.813 37.138-4.012 71.196-.898 96.344 22.97 22.33 21.19 36.21 56.808 41.908 113.436 29.246-35.682 44.538-69.065 49.343-99.594 5.543-35.207-2.526-66.97-20.31-95.593-8.52-13.708-19.368-26.618-32-38.626l14.217-33-41.218 10.625c-8.637-6.278-17.765-12.217-27.314-17.782l-7.03-59.782-38.157 37.406a423.505 423.505 0 0 0-38.158-13.812l-8.375-71.28-57.625 56.5c-9.344-1.316-18.625-2.333-27.812-2.97l-31.094-78.125zM222 325.345c-39.146 7.525-82.183 14.312-127.156 11.686 47.403 113.454 207.056 224.082 260.125 87-101.18 33.84-95.303-49.595-132.97-98.686z' },
   { id: 'productivity', label: 'Productivity', icon: 'M13 2L3 14h9l-1 8 10-12h-9l1-8z' },
   { id: 'sync', label: 'Sync', icon: 'M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8 M21 3v5h-5' },
   { id: 'nostr', label: 'Nostr', icon: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z' },
@@ -134,7 +135,7 @@ const Settings: Component<SettingsProps> = (props) => {
   // Filter sections based on platform - hide OpenCode, Productivity, and Hotkeys on mobile
   const filteredSections = () => {
     if (isMobileApp()) {
-      return sections.filter(s => s.id !== 'opencode' && s.id !== 'productivity' && s.id !== 'hotkeys');
+      return sections.filter(s => s.id !== 'opencode' && s.id !== 'openclaw' && s.id !== 'productivity' && s.id !== 'hotkeys');
     }
     return sections;
   };
@@ -254,6 +255,55 @@ const Settings: Component<SettingsProps> = (props) => {
   const [providerPickerOpen, setProviderPickerOpen] = createSignal(false);
   const [providerSearch, setProviderSearch] = createSignal('');
   let providerSearchRef: HTMLInputElement | undefined;
+
+  // OpenClaw settings
+  const [openClawUrl, setOpenClawUrl] = createSignal<string>(
+    localStorage.getItem('openclaw_url') || ''
+  );
+  const [openClawToken, setOpenClawToken] = createSignal<string>(
+    localStorage.getItem('openclaw_token') || ''
+  );
+  const [openClawTokenVisible, setOpenClawTokenVisible] = createSignal(false);
+  const [openClawTestStatus, setOpenClawTestStatus] = createSignal<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [openClawTestError, setOpenClawTestError] = createSignal<string | null>(null);
+
+  const handleOpenClawUrlChange = (value: string) => {
+    setOpenClawUrl(value);
+    localStorage.setItem('openclaw_url', value);
+    window.dispatchEvent(new CustomEvent('openclaw-settings-changed'));
+  };
+
+  const handleOpenClawTokenChange = (value: string) => {
+    setOpenClawToken(value);
+    localStorage.setItem('openclaw_token', value);
+    window.dispatchEvent(new CustomEvent('openclaw-settings-changed'));
+  };
+
+  const handleTestOpenClawConnection = async () => {
+    const url = openClawUrl();
+    const token = openClawToken();
+    if (!url || !token) return;
+
+    setOpenClawTestStatus('testing');
+    setOpenClawTestError(null);
+
+    try {
+      const baseUrl = url.replace(/\/+$/, '');
+      await invoke('openclaw_request', {
+        url: `${baseUrl}/v1/chat/completions`,
+        token,
+        body: JSON.stringify({
+          model: 'openclaw:main',
+          messages: [{ role: 'user', content: 'ping' }],
+          stream: false,
+        }),
+      });
+      setOpenClawTestStatus('success');
+    } catch (err: any) {
+      setOpenClawTestStatus('error');
+      setOpenClawTestError(err.message || err || 'Connection failed');
+    }
+  };
 
   // Files & Links settings
   const [useWikilinks, setUseWikilinks] = createSignal(
@@ -1858,9 +1908,15 @@ const Settings: Component<SettingsProps> = (props) => {
                   class={`settings-nav-item ${activeSection() === section.id ? 'active' : ''}`}
                   onClick={() => setActiveSection(section.id)}
                 >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d={section.icon}></path>
-                  </svg>
+                  {section.id === 'openclaw' ? (
+                    <svg width="18" height="18" viewBox="0 0 512 512" fill="currentColor">
+                      <path d={section.icon}></path>
+                    </svg>
+                  ) : (
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d={section.icon}></path>
+                    </svg>
+                  )}
                   <span>{section.label}</span>
                 </button>
               )}
@@ -2874,6 +2930,121 @@ const Settings: Component<SettingsProps> = (props) => {
                     Download
                   </button>
                 </div>
+              </div>
+            </Show>
+
+            {/* OpenClaw Settings */}
+            <Show when={activeSection() === 'openclaw'}>
+              <div class="settings-section">
+                <div class="settings-section-title">OpenClaw Configuration</div>
+
+                <div class="settings-notice">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                  </svg>
+                  <p>OpenClaw is an AI assistant server. Configure your server URL and gateway token to connect.</p>
+                </div>
+
+                <div class="settings-section-title">Server URL</div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">OpenClaw Server URL</div>
+                    <div class="setting-description">The URL of your OpenClaw server (e.g., http://localhost:18789)</div>
+                  </div>
+                </div>
+                <div class="setting-item column">
+                  <input
+                    type="text"
+                    class="setting-input wide"
+                    placeholder="http://localhost:18789"
+                    value={openClawUrl()}
+                    onInput={(e) => handleOpenClawUrlChange(e.currentTarget.value)}
+                  />
+                </div>
+
+                <div class="settings-section-title">Gateway Token</div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">Authorization Token</div>
+                    <div class="setting-description">Your OpenClaw gateway token for authentication</div>
+                  </div>
+                </div>
+                <div class="setting-item column">
+                  <div class="openclaw-token-input">
+                    <input
+                      type={openClawTokenVisible() ? 'text' : 'password'}
+                      class="setting-input wide"
+                      placeholder="Enter your gateway token"
+                      value={openClawToken()}
+                      onInput={(e) => handleOpenClawTokenChange(e.currentTarget.value)}
+                    />
+                    <button
+                      class="setting-button secondary"
+                      onClick={() => setOpenClawTokenVisible(!openClawTokenVisible())}
+                      title={openClawTokenVisible() ? 'Hide token' : 'Show token'}
+                    >
+                      <Show when={openClawTokenVisible()} fallback={
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                          <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
+                      }>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                          <line x1="1" y1="1" x2="23" y2="23"></line>
+                        </svg>
+                      </Show>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="settings-section-title">Connection Test</div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">Test Connection</div>
+                    <div class="setting-description">Verify that your OpenClaw server is reachable and the token is valid</div>
+                  </div>
+                  <button
+                    class="setting-button"
+                    onClick={handleTestOpenClawConnection}
+                    disabled={!openClawUrl() || !openClawToken() || openClawTestStatus() === 'testing'}
+                  >
+                    <Show when={openClawTestStatus() === 'testing'} fallback={
+                      <>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                        Test
+                      </>
+                    }>
+                      <div class="spinner small"></div>
+                      Testing...
+                    </Show>
+                  </button>
+                </div>
+
+                <Show when={openClawTestStatus() === 'success'}>
+                  <div class="settings-notice success">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                      <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                    </svg>
+                    <p>Connection successful! OpenClaw server is reachable.</p>
+                  </div>
+                </Show>
+
+                <Show when={openClawTestStatus() === 'error'}>
+                  <div class="settings-notice warning">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <line x1="12" y1="8" x2="12" y2="12"></line>
+                      <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                    </svg>
+                    <p>Connection failed: {openClawTestError()}</p>
+                  </div>
+                </Show>
               </div>
             </Show>
 

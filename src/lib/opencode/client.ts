@@ -498,7 +498,7 @@ export async function respondToQuestion(
  * @deprecated Use respondToQuestion instead
  */
 export async function respondToPermission(
-  sessionId: string,
+  _sessionId: string,
   permissionId: string,
   response: string[]
 ): Promise<void> {

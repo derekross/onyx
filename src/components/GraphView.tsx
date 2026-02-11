@@ -212,14 +212,15 @@ const GraphView: Component<GraphViewProps> = (props) => {
 
   // Re-render when graph data, mode, depth, current file, or container changes
   createEffect(() => {
-    const data = graphData();
-    const mode = localMode();
-    const d = depth();
-    const file = props.currentFile;
+    // Track reactive dependencies
+    graphData();
+    localMode();
+    depth();
+    void props.currentFile;
     const ready = containerReady();
 
     // Only render when container is ready and we have data
-    if (ready && data) {
+    if (ready && graphData()) {
       renderGraph();
     }
   });

@@ -1959,6 +1959,81 @@ mod keyring_commands {
     }
 }
 
+// OpenClaw HTTP proxy commands (bypasses CORS)
+#[tauri::command]
+async fn openclaw_request(url: String, token: String, body: String) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .body(body)
+        .timeout(Duration::from_secs(120))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Server returned {}: {}", status, body));
+    }
+
+    response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))
+}
+
+#[tauri::command]
+async fn openclaw_stream(
+    app: AppHandle,
+    request_id: String,
+    url: String,
+    token: String,
+    body: String,
+) -> Result<(), String> {
+    use futures_util::StreamExt;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .body(body)
+        .timeout(Duration::from_secs(300))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Server returned {}: {}", status, body));
+    }
+
+    let mut stream = response.bytes_stream();
+    let event_name = format!("openclaw-stream-{}", request_id);
+
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(bytes) => {
+                if let Ok(text) = String::from_utf8(bytes.to_vec()) {
+                    let _ = app.emit(&event_name, text);
+                }
+            }
+            Err(e) => {
+                let _ = app.emit(&event_name, format!("__ERROR__:{}", e));
+                break;
+            }
+        }
+    }
+
+    // Signal end of stream
+    let _ = app.emit(&event_name, "__DONE__");
+    Ok(())
+}
+
 /// Get any deep link URLs passed as command line arguments
 /// On Linux, when the app is launched via xdg-open, the URL is passed as an argument
 #[tauri::command]
@@ -2180,6 +2255,8 @@ pub fn run() {
             opencode_installer::install_opencode,
             opencode_installer::get_opencode_version,
             get_deep_link_args,
+            openclaw_request,
+            openclaw_stream,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

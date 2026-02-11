@@ -16,12 +16,12 @@ function getTodayDate(): string {
 }
 
 // Create the ProseMirror plugin for task checkboxes
-export const taskPlugin = $prose((ctx) => {
+export const taskPlugin = $prose((_ctx) => {
   return new Plugin({
     key: taskPluginKey,
 
     props: {
-      handleClick(view, pos, event) {
+      handleClick(view, _pos, event) {
         const target = event.target as HTMLElement;
 
         // Find the task list item - could be the target or a parent
@@ -83,7 +83,7 @@ export const taskPlugin = $prose((ctx) => {
 
         // Now handle the completion date in the text content
         // We need to find text nodes within this list item and modify them
-        const nodeEnd = taskNodePos + taskNode.nodeSize;
+        const nodeEnd: number = taskNodePos + (taskNode.nodeSize as number);
 
         // Find text content within the task item
         let textNodePos: number | null = null;
@@ -97,19 +97,20 @@ export const taskPlugin = $prose((ctx) => {
         });
 
         if (textNodePos !== null && textNode) {
-          const currentText = textNode.text || '';
+          const currentText: string = textNode.text || '';
+          const textLen = currentText.length;
 
           if (newCheckedState) {
             // Adding completion - append date if not already present
             if (!COMPLETION_DATE_REGEX.test(currentText)) {
               const newText = `${currentText} ✅ ${getTodayDate()}`;
-              tr.insertText(newText, textNodePos, textNodePos + currentText.length);
+              tr.insertText(newText, textNodePos, textNodePos + textLen);
             }
           } else {
             // Removing completion - strip the date suffix
             if (COMPLETION_DATE_REGEX.test(currentText)) {
               const newText = currentText.replace(COMPLETION_DATE_REGEX, '');
-              tr.insertText(newText, textNodePos, textNodePos + currentText.length);
+              tr.insertText(newText, textNodePos, textNodePos + textLen);
             }
           }
         }

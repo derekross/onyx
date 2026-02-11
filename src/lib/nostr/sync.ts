@@ -546,7 +546,7 @@ export class SyncEngine {
           authors: [this.pubkey!],
           since: Math.floor(Date.now() / 1000),
         },
-      ],
+      ] as any,
       {
         onevent: onUpdate,
         oneose: () => {

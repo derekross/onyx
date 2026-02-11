@@ -1,4 +1,4 @@
-import { Component, createSignal, onMount, onCleanup } from 'solid-js';
+import { Component, createSignal } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 
 interface TerminalProps {
@@ -42,6 +42,7 @@ const Terminal: Component<TerminalProps> = (props) => {
     }
   };
 
+  // @ts-expect-error Reserved for future terminal command input
   const runCommand = async (command: string) => {
     if (isRunning() || !command.trim()) return;
 
@@ -79,8 +80,8 @@ const Terminal: Component<TerminalProps> = (props) => {
         </div>
       </div>
       <div class="terminal-output" ref={outputRef}>
-        {output().map((line, i) => (
-          <div class="terminal-line" key={i}>{line}</div>
+        {output().map((line) => (
+          <div class="terminal-line">{line}</div>
         ))}
         {output().length === 0 && (
           <div class="terminal-placeholder">

@@ -73,7 +73,7 @@ export const hashtagPlugin = $prose(() => {
         return this.getState(state);
       },
 
-      handleClick(view, pos, event) {
+      handleClick(_view, _pos, event) {
         const target = event.target as HTMLElement;
 
         // Check if clicked element is a hashtag

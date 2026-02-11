@@ -105,7 +105,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
   const [searchResults, setSearchResults] = createSignal<SearchResult[]>([]);
   const [isSearching, setIsSearching] = createSignal(false);
   const [sortOrder, setSortOrder] = createSignal<'name' | 'modified'>('name');
-  const [allCollapsed, setAllCollapsed] = createSignal(false);
+  const [, setAllCollapsed] = createSignal(false);
   const [showVaultMenu, setShowVaultMenu] = createSignal(false);
   const [deleteConfirm, setDeleteConfirm] = createSignal<{ path: string; name: string } | null>(null);
   const [moveConfirm, setMoveConfirm] = createSignal<{ sourcePath: string; destPath: string; name: string } | null>(null);
@@ -431,7 +431,8 @@ const Sidebar: Component<SidebarProps> = (props) => {
   const handleDragLeave = (e: DragEvent) => {
     // Only clear if leaving the element entirely
     const relatedTarget = e.relatedTarget as HTMLElement;
-    if (!relatedTarget || !e.currentTarget.contains(relatedTarget)) {
+    const current = e.currentTarget as HTMLElement | null;
+    if (!relatedTarget || !current?.contains(relatedTarget)) {
       setDropTarget(null);
     }
   };
@@ -759,7 +760,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
           }}
           onDragLeave={(e) => {
             const relatedTarget = e.relatedTarget as HTMLElement;
-            if (!relatedTarget || !e.currentTarget.contains(relatedTarget)) {
+    if (!relatedTarget || !(e.currentTarget as HTMLElement)?.contains(relatedTarget)) {
               if (dropTarget() === props.vaultPath) setDropTarget(null);
             }
           }}
