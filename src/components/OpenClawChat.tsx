@@ -18,6 +18,7 @@ import { sanitizeUrl } from '../lib/security';
 interface OpenClawMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
+  _internal?: boolean; // Hidden from display, only used in API conversation
 }
 
 interface FileAction {
@@ -51,20 +52,22 @@ interface OpenClawChatProps {
 // --- System prompt for structured file actions ---
 
 function buildSystemPrompt(vaultPath: string): string {
-  return `You are an AI assistant integrated into Onyx, a note-taking and productivity app. The user's vault (workspace) is at: ${vaultPath}
+  return `You are an AI assistant running inside Onyx, a desktop note-taking app. You are connected to the user's local filesystem through Onyx's built-in file tools. The user's vault is at: ${vaultPath}
 
-You have the ability to read, write, edit, list, and search files in the user's vault. To do so, include an action block in your response using this exact format:
+YOU CAN DIRECTLY READ AND WRITE FILES. You are not limited to just giving instructions — you have real file access through action blocks that Onyx executes locally on the user's machine. When the user asks you to create, update, edit, or modify any file, you MUST use an action block to do it. NEVER tell the user to do it themselves. NEVER just show content in a code block and ask them to paste it. ALWAYS use the action block to perform the operation directly.
+
+Action block format — include these in your response and Onyx will execute them:
 
 ~~~action
-{"action": "read_file", "path": "/absolute/path/to/file.md"}
+{"action": "write_file", "path": "${vaultPath}/example.md", "content": "full file content"}
 ~~~
 
 ~~~action
-{"action": "write_file", "path": "/absolute/path/to/file.md", "content": "full file content here"}
+{"action": "edit_file", "path": "${vaultPath}/example.md", "old_text": "exact text to find", "new_text": "replacement"}
 ~~~
 
 ~~~action
-{"action": "edit_file", "path": "/absolute/path/to/file.md", "old_text": "text to find", "new_text": "replacement text"}
+{"action": "read_file", "path": "${vaultPath}/example.md"}
 ~~~
 
 ~~~action
@@ -76,14 +79,16 @@ You have the ability to read, write, edit, list, and search files in the user's 
 ~~~
 
 RULES:
-- Always use ABSOLUTE paths starting with ${vaultPath}
-- You can include multiple action blocks in one response
-- You can include explanation text before and after action blocks
-- For write_file, provide the COMPLETE file content
-- For edit_file, old_text must match EXACTLY (including whitespace)
-- The app will execute these actions locally and show results to the user
-- When the user asks you to create, modify, or update files, USE ACTION BLOCKS — do not just show the content in a code block
-- After a read_file or search_files action, the results will be sent back to you so you can continue the conversation`;
+- ALWAYS use action blocks for ANY file operation. You have full read/write access. Do not hesitate.
+- ALL paths MUST be absolute, starting with ${vaultPath}
+- For write_file: provide the COMPLETE file content
+- BEFORE using edit_file, ALWAYS use read_file first to see the current content. You need the exact text to match. Never guess at file contents.
+- For edit_file: old_text must match the file content EXACTLY (including whitespace and newlines)
+- You may include explanation text before or after action blocks
+- You may include multiple action blocks in one response
+- After read_file, list_files, or search_files, the results are sent back to you automatically so you can continue
+- If you are unsure whether a file exists, use read_file or list_files first — do not guess
+- Preferred workflow for editing: read_file first, then edit_file with the exact text from the read result`;
 }
 
 // --- Parse action blocks from response text ---
@@ -290,7 +295,9 @@ const OpenClawChat: Component<OpenClawChatProps> = (props) => {
           if (!action.old_text || action.new_text === undefined) throw new Error('old_text and new_text required');
           const current = await invoke<string>('read_file', { path: action.path, vaultPath });
           if (!current.includes(action.old_text)) {
-            return { action, success: false, result: `Could not find the specified text in ${action.path}` };
+            // Return the actual file content so the model can see what's there and retry
+            const preview = current.length > 5000 ? current.slice(0, 5000) + '\n[...truncated]' : current;
+            return { action, success: false, result: `Could not find the specified old_text in ${action.path}. Here is the current file content so you can retry with the exact text:\n\n${preview}` };
           }
           const updated = current.replace(action.old_text, action.new_text);
           await invoke('write_file', { path: action.path, content: updated, vaultPath });
@@ -345,20 +352,22 @@ const OpenClawChat: Component<OpenClawChatProps> = (props) => {
   };
 
   // Process actions from a completed response, execute them, and optionally continue conversation
-  const processActions = async (fullText: string) => {
+  // isRetry: true when this is a follow-up from a failed edit -- hide intermediate chatter
+  const processActions = async (fullText: string, isRetry: boolean = false) => {
     const { actions, cleanText } = parseActions(fullText);
 
     if (actions.length === 0) {
-      // No actions - just add the text as assistant message
+      // No actions - add text as assistant message (but hide retry chatter)
       if (fullText.trim()) {
-        setMessages(prev => [...prev, { role: 'assistant', content: fullText }]);
+        setMessages(prev => [...prev, { role: 'assistant', content: fullText, _internal: isRetry }]);
       }
       return;
     }
 
     // Add the clean text (without action blocks) as assistant message
+    // Hide intermediate "let me retry" text during retries
     if (cleanText.trim()) {
-      setMessages(prev => [...prev, { role: 'assistant', content: cleanText }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: cleanText, _internal: isRetry }]);
     }
 
     // Execute each action
@@ -378,30 +387,38 @@ const OpenClawChat: Component<OpenClawChatProps> = (props) => {
       ));
     }
 
-    // Show action results summary in chat
-    const resultsSummary = results.map(r => {
-      const icon = r.success ? 'Done' : 'Failed';
-      const desc = getActionDescription(r.action);
-      return `**${icon}:** ${desc}`;
-    }).join('\n');
-    setMessages(prev => [...prev, { role: 'assistant', content: resultsSummary }]);
+    // Only show successful actions to the user (failures are retried silently)
+    const successes = results.filter(r => r.success);
 
-    // For read actions or searches, send results back to the model for follow-up
-    const readResults = results.filter(r =>
-      r.success && (r.action.action === 'read_file' || r.action.action === 'search_files' || r.action.action === 'list_files')
+    // Only show successful actions to the user
+    if (successes.length > 0) {
+      const successSummary = successes.map(r => {
+        const desc = getActionDescription(r.action);
+        return `**Done:** ${desc}`;
+      }).join('\n');
+      setMessages(prev => [...prev, { role: 'assistant', content: successSummary }]);
+    }
+
+    // Send results back to the model when needed (reads return data, failed edits need retry)
+    // These are internal messages -- hidden from the user
+    const resultsToSendBack = results.filter(r =>
+      (r.success && (r.action.action === 'read_file' || r.action.action === 'search_files' || r.action.action === 'list_files'))
+      || (!r.success && r.action.action === 'edit_file')
     );
 
-    if (readResults.length > 0) {
-      const followUpContent = readResults.map(r => {
+    if (resultsToSendBack.length > 0) {
+      const followUpContent = resultsToSendBack.map(r => {
         const desc = getActionDescription(r.action);
-        return `[Result of ${desc}]\n${r.result}`;
+        const status = r.success ? 'Result' : 'Failed — retry with the exact text shown below';
+        return `[${status} of ${desc}]\n${r.result}`;
       }).join('\n\n---\n\n');
 
-      // Add as a system-ish user message (the app reporting results back)
-      setMessages(prev => [...prev, { role: 'user', content: `[Action results]\n\n${followUpContent}` }]);
+      // Internal message: sent to API but hidden from display
+      setMessages(prev => [...prev, { role: 'user', content: `[Action results]\n\n${followUpContent}`, _internal: true }]);
 
-      // Send a follow-up request so the model can use the results
-      await sendCompletionAndProcess();
+      // Determine if this is a retry (failed edits) -- hide model's retry chatter
+      const isEditRetry = resultsToSendBack.some(r => !r.success && r.action.action === 'edit_file');
+      await sendCompletionAndProcess(isEditRetry);
     }
 
     // Clear executing state after a brief delay so user sees the results
@@ -508,13 +525,13 @@ const OpenClawChat: Component<OpenClawChatProps> = (props) => {
     return apiMessages;
   };
 
-  // Send completion and process response (used for follow-ups)
-  const sendCompletionAndProcess = async () => {
+  // Send completion and process response (used for follow-ups / retries)
+  const sendCompletionAndProcess = async (isRetry: boolean = false) => {
     setStreamingContent('');
     const apiMessages = buildApiMessages();
     const fullText = await streamCompletion(apiMessages);
     setStreamingContent('');
-    await processActions(fullText);
+    await processActions(fullText, isRetry);
   };
 
   // --- Main send handler ---
@@ -673,7 +690,7 @@ const OpenClawChat: Component<OpenClawChatProps> = (props) => {
 
   // Filter out system messages and action-result messages for display
   const displayMessages = () => {
-    return messages().filter(m => m.role !== 'system');
+    return messages().filter(m => m.role !== 'system' && !m._internal);
   };
 
   const ClawIcon = () => (
