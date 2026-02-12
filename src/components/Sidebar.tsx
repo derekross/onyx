@@ -18,6 +18,7 @@ interface SidebarProps {
   onVaultOpen: (path: string) => void;
   onFileCreated: (path: string) => void;
   onFileDeleted: (path: string) => void;
+  onFileMoved?: (oldPath: string, newPath: string) => void;
   view: SidebarView;
   bookmarks: string[];
   onToggleBookmark: (path: string) => void;
@@ -281,6 +282,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
     try {
       await invoke('rename_file', { oldPath, newPath });
+      props.onFileMoved?.(oldPath, newPath);
       await refreshFiles();
       if (props.currentFile === oldPath) {
         props.onFileSelect(newPath);
@@ -382,6 +384,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
     try {
       await invoke('rename_file', { oldPath: move.sourcePath, newPath: move.destPath });
+      props.onFileMoved?.(move.sourcePath, move.destPath);
       await refreshFiles();
 
       if (props.currentFile === move.sourcePath) {

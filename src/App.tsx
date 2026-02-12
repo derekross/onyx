@@ -30,7 +30,7 @@ import { onBackButtonPress } from '@tauri-apps/api/app';
 import { writeTextFile, mkdir, exists } from '@tauri-apps/plugin-fs';
 import { onOpenUrl, getCurrent as getDeepLinkCurrent } from '@tauri-apps/plugin-deep-link';
 import { readText } from '@tauri-apps/plugin-clipboard-manager';
-import { getSyncEngine, getCurrentLogin } from './lib/nostr';
+import { getSyncEngine, getCurrentLogin, calculateChecksum } from './lib/nostr';
 import { getSignerFromStoredLogin } from './lib/nostr/signer';
 import { sanitizeFilePath } from './lib/security';
 import { buildNoteIndex, resolveWikilink, NoteIndex, FileEntry, NoteGraph, buildNoteGraph } from './lib/editor/note-index';
@@ -1475,6 +1475,35 @@ const App: Component = () => {
     }
   };
 
+  const handleFileMoved = (oldPath: string, newPath: string) => {
+    const vault = vaultPath();
+    if (!vault) return;
+    
+    const oldRelative = oldPath.replace(vault + '/', '');
+    const newRelative = newPath.replace(vault + '/', '');
+    
+    // Track the move for Nostr sync
+    const movedPaths = JSON.parse(localStorage.getItem('moved_paths') || '[]') as Array<{ from: string; to: string }>;
+    
+    // If this file was previously moved (A -> B, now B -> C), update to A -> C
+    const existingIdx = movedPaths.findIndex(m => m.to === oldRelative);
+    if (existingIdx >= 0) {
+      movedPaths[existingIdx].to = newRelative;
+    } else {
+      movedPaths.push({ from: oldRelative, to: newRelative });
+    }
+    
+    localStorage.setItem('moved_paths', JSON.stringify(movedPaths));
+    
+    // Update the local d-tag map so we preserve file identity across the move
+    const dtagMap = JSON.parse(localStorage.getItem('file_dtag_map') || '{}') as Record<string, string>;
+    if (dtagMap[oldRelative]) {
+      dtagMap[newRelative] = dtagMap[oldRelative];
+      delete dtagMap[oldRelative];
+      localStorage.setItem('file_dtag_map', JSON.stringify(dtagMap));
+    }
+  };
+
   const toggleBookmark = async (path: string) => {
     const current = bookmarks();
     let updated: string[];
@@ -1731,6 +1760,10 @@ const App: Component = () => {
       let downloadedCount = 0;
       let uploadedCount = 0;
       let deletedCount = 0;
+      let movedCount = 0;
+
+      // Collect local-only files (not matched by path on remote)
+      const localOnlyFiles: typeof localFiles = [];
 
       for (const localFile of localFiles) {
         const remoteFile = remoteFileMap.get(localFile.path);
@@ -1768,11 +1801,8 @@ const App: Component = () => {
           // Remove from map - we've handled this file
           remoteFileMap.delete(localFile.path);
         } else {
-          // Local-only file - upload to remote
-          console.log(`[Sync] Uploading new local file: ${localFile.path}`);
-          const result = await engine.publishFile(vault, localFile.path, localFile.content);
-          vault = result.vault;
-          uploadedCount++;
+          // Local-only file - collect for move detection before uploading
+          localOnlyFiles.push(localFile);
         }
       }
 
@@ -1803,6 +1833,137 @@ const App: Component = () => {
       // Update the locally deleted paths - only keep those that need continued tracking
       localStorage.setItem('deleted_paths', JSON.stringify(pathsToKeepTracking));
 
+      // --- Move detection (3 layers) ---
+      // Load the local d-tag map (path -> d-tag) persisted from previous syncs
+      const dtagMap = JSON.parse(localStorage.getItem('file_dtag_map') || '{}') as Record<string, string>;
+      // Build a reverse lookup: d-tag -> remote file (for d-tag-based matching)
+      const remoteByDtag = new Map(remoteFiles.map(f => [f.d, f]));
+
+      // Layer 1: Explicitly tracked moves (from in-app rename/move operations)
+      // These are the most reliable -- we know exactly what was moved where.
+      const movedPaths = JSON.parse(localStorage.getItem('moved_paths') || '[]') as Array<{ from: string; to: string }>;
+      const movesToKeep: Array<{ from: string; to: string }> = [];
+      
+      for (const move of movedPaths) {
+        const remoteFile = remoteFileMap.get(move.from);
+        const localFile = localOnlyFiles.find(f => f.path === move.to);
+        
+        if (remoteFile && localFile) {
+          console.log(`[Sync] Processing tracked move: ${move.from} -> ${move.to}`);
+          try {
+            const result = await engine.moveFile(vault, move.from, move.to, localFile.content);
+            vault = result.vault;
+            movedCount++;
+            remoteFileMap.delete(move.from);
+            const idx = localOnlyFiles.indexOf(localFile);
+            if (idx >= 0) localOnlyFiles.splice(idx, 1);
+          } catch (err) {
+            console.error(`[Sync] Failed to process tracked move ${move.from} -> ${move.to}:`, err);
+            movesToKeep.push(move);
+          }
+        } else if (remoteFile && !localFile) {
+          // The destination file wasn't found locally - keep tracking
+          movesToKeep.push(move);
+        }
+        // If remote file doesn't exist at old path, the move was already handled or file was deleted
+      }
+      
+      localStorage.setItem('moved_paths', JSON.stringify(movesToKeep));
+
+      // Layer 2: d-tag map matching
+      // For local-only files that have a known d-tag from a previous sync,
+      // find the remote file by d-tag. This handles move+edit correctly since
+      // the identity is tracked independently of content.
+      if (localOnlyFiles.length > 0) {
+        const dtagMatchedIndices = new Set<number>();
+        
+        for (let i = 0; i < localOnlyFiles.length; i++) {
+          const localFile = localOnlyFiles[i];
+          const knownDtag = dtagMap[localFile.path];
+          if (!knownDtag) continue;
+          
+          // Look up the remote file by d-tag
+          const remoteFile = remoteByDtag.get(knownDtag);
+          if (!remoteFile) continue;
+          
+          // Check if the remote file is at a different path (meaning it wasn't already matched by path)
+          if (remoteFile.data.path === localFile.path) continue;
+          
+          // Confirm the remote file is still in the unmatched set
+          if (!remoteFileMap.has(remoteFile.data.path)) continue;
+          
+          console.log(`[Sync] Detected move by d-tag map: ${remoteFile.data.path} -> ${localFile.path}`);
+          try {
+            const result = await engine.moveFile(vault, remoteFile.data.path, localFile.path, localFile.content);
+            vault = result.vault;
+            movedCount++;
+            remoteFileMap.delete(remoteFile.data.path);
+            dtagMatchedIndices.add(i);
+          } catch (err) {
+            console.error(`[Sync] Failed to process d-tag move ${remoteFile.data.path} -> ${localFile.path}:`, err);
+          }
+        }
+        
+        for (let i = localOnlyFiles.length - 1; i >= 0; i--) {
+          if (dtagMatchedIndices.has(i)) {
+            localOnlyFiles.splice(i, 1);
+          }
+        }
+      }
+
+      // Layer 3: SHA-256 content matching (fallback for system file manager moves)
+      // Match remaining local-only files against remaining remote-only files by checksum.
+      // This won't catch move+edit, but handles simple moves from outside Onyx.
+      if (localOnlyFiles.length > 0 && remoteFileMap.size > 0) {
+        const remoteByChecksum = new Map<string, Array<{ path: string; file: typeof remoteFiles[0] }>>();
+        for (const [path, file] of remoteFileMap) {
+          const cs = file.data.checksum;
+          if (!remoteByChecksum.has(cs)) {
+            remoteByChecksum.set(cs, []);
+          }
+          remoteByChecksum.get(cs)!.push({ path, file });
+        }
+
+        const matchedLocalIndices = new Set<number>();
+        
+        for (let i = 0; i < localOnlyFiles.length; i++) {
+          const localFile = localOnlyFiles[i];
+          const localChecksum = calculateChecksum(localFile.content);
+          const candidates = remoteByChecksum.get(localChecksum);
+          
+          if (candidates && candidates.length > 0) {
+            const match = candidates.shift()!;
+            if (candidates.length === 0) {
+              remoteByChecksum.delete(localChecksum);
+            }
+            
+            console.log(`[Sync] Detected move by SHA-256 match: ${match.path} -> ${localFile.path}`);
+            try {
+              const result = await engine.moveFile(vault, match.path, localFile.path, localFile.content);
+              vault = result.vault;
+              movedCount++;
+              remoteFileMap.delete(match.path);
+              matchedLocalIndices.add(i);
+            } catch (err) {
+              console.error(`[Sync] Failed to process checksum move ${match.path} -> ${localFile.path}:`, err);
+            }
+          }
+        }
+        
+        for (let i = localOnlyFiles.length - 1; i >= 0; i--) {
+          if (matchedLocalIndices.has(i)) {
+            localOnlyFiles.splice(i, 1);
+          }
+        }
+      }
+
+      // Upload remaining local-only files (truly new files)
+      for (const localFile of localOnlyFiles) {
+        console.log(`[Sync] Uploading new local file: ${localFile.path}`);
+        const result = await engine.publishFile(vault, localFile.path, localFile.content);
+        vault = result.vault;
+        uploadedCount++;
+      }
 
       // Download remote-only files (files that exist on remote but not locally)
       // Skip files that were deleted locally or are in the vault's deleted list
@@ -1830,7 +1991,15 @@ const App: Component = () => {
         downloadedCount++;
       }
       
-      console.log(`[Sync] Complete: ${uploadedCount} uploaded, ${downloadedCount} downloaded, ${deletedCount} deleted`);
+      // Persist the d-tag map from the final vault state
+      // This maps each file's relative path to its stable Nostr d-tag identity
+      const updatedDtagMap: Record<string, string> = {};
+      for (const fileEntry of vault.data.files) {
+        updatedDtagMap[fileEntry.path] = fileEntry.d;
+      }
+      localStorage.setItem('file_dtag_map', JSON.stringify(updatedDtagMap));
+
+      console.log(`[Sync] Complete: ${uploadedCount} uploaded, ${downloadedCount} downloaded, ${deletedCount} deleted, ${movedCount} moved`);
 
       setSyncStatus('idle');
 
@@ -2189,6 +2358,7 @@ const App: Component = () => {
             onVaultOpen={setVaultPath}
             onFileCreated={handleFileCreated}
             onFileDeleted={handleFileDeleted}
+            onFileMoved={handleFileMoved}
             view={sidebarView()}
             bookmarks={bookmarks()}
             onToggleBookmark={toggleBookmark}
@@ -2372,6 +2542,7 @@ const App: Component = () => {
             onVaultOpen={setVaultPath}
             onFileCreated={handleFileCreated}
             onFileDeleted={handleFileDeleted}
+            onFileMoved={handleFileMoved}
             view={sidebarView()}
             bookmarks={bookmarks()}
             onToggleBookmark={toggleBookmark}

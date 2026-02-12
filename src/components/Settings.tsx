@@ -6,6 +6,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
   getSyncEngine,
   setOnSaveSyncCallback,
+  calculateChecksum,
   type NostrIdentity,
   DEFAULT_SYNC_CONFIG,
   // Login functions
@@ -1367,28 +1368,34 @@ const Settings: Component<SettingsProps> = (props) => {
       let uploadedCount = 0;
       let downloadedCount = 0;
       let deletedCount = 0;
+      let movedCount = 0;
 
       // Rate limit: delay between uploads to avoid spamming relays
       const UPLOAD_DELAY_MS = 500; // 500ms between uploads
       
+      // Collect local-only files for move detection
+      const localOnlyFiles: typeof localFiles = [];
+      
       for (const localFile of localFiles) {
         const remoteFile = remoteFileMap.get(localFile.path);
 
-        // Check if file needs to be uploaded (new or content changed)
-        if (!remoteFile || remoteFile.data.content !== localFile.content) {
-          setSyncMessage(`Uploading ${localFile.path}... (${uploadedCount + 1} files)`);
-          const result = await engine.publishFile(vault, localFile.path, localFile.content, remoteFile);
-          vault = result.vault; // Update vault with new file index
-          uploadedCount++;
-          
-          // Add delay between uploads to avoid rate limiting
-          if (uploadedCount > 0) {
-            await new Promise(resolve => setTimeout(resolve, UPLOAD_DELAY_MS));
+        if (remoteFile) {
+          // Check if file needs to be uploaded (content changed)
+          if (remoteFile.data.content !== localFile.content) {
+            setSyncMessage(`Uploading ${localFile.path}... (${uploadedCount + 1} files)`);
+            const result = await engine.publishFile(vault, localFile.path, localFile.content, remoteFile);
+            vault = result.vault;
+            uploadedCount++;
+            
+            if (uploadedCount > 0) {
+              await new Promise(resolve => setTimeout(resolve, UPLOAD_DELAY_MS));
+            }
           }
+          remoteFileMap.delete(localFile.path);
+        } else {
+          // Local-only file - collect for move detection
+          localOnlyFiles.push(localFile);
         }
-
-        // Remove from map so we know what's left (remote-only files)
-        remoteFileMap.delete(localFile.path);
       }
 
       // Process local deletions - sync them to the vault
@@ -1419,6 +1426,126 @@ const Settings: Component<SettingsProps> = (props) => {
       // Update the locally deleted paths - only keep those that need continued tracking
       localStorage.setItem('deleted_paths', JSON.stringify(pathsToKeepTracking));
 
+      // --- Move detection (3 layers) ---
+      const dtagMap = JSON.parse(localStorage.getItem('file_dtag_map') || '{}') as Record<string, string>;
+      const remoteByDtag = new Map(remoteFiles.map(f => [f.d, f]));
+
+      // Layer 1: Explicitly tracked moves (from in-app rename/move operations)
+      const movedPaths = JSON.parse(localStorage.getItem('moved_paths') || '[]') as Array<{ from: string; to: string }>;
+      const movesToKeep: Array<{ from: string; to: string }> = [];
+      
+      for (const move of movedPaths) {
+        const remoteFile = remoteFileMap.get(move.from);
+        const localFile = localOnlyFiles.find(f => f.path === move.to);
+        
+        if (remoteFile && localFile) {
+          setSyncMessage(`Processing move: ${move.from} -> ${move.to}`);
+          try {
+            const result = await engine.moveFile(vault, move.from, move.to, localFile.content);
+            vault = result.vault;
+            movedCount++;
+            remoteFileMap.delete(move.from);
+            const idx = localOnlyFiles.indexOf(localFile);
+            if (idx >= 0) localOnlyFiles.splice(idx, 1);
+          } catch (err) {
+            console.error(`[Sync] Failed to process tracked move ${move.from} -> ${move.to}:`, err);
+            movesToKeep.push(move);
+          }
+        } else if (remoteFile && !localFile) {
+          movesToKeep.push(move);
+        }
+      }
+      
+      localStorage.setItem('moved_paths', JSON.stringify(movesToKeep));
+
+      // Layer 2: d-tag map matching (handles move+edit)
+      if (localOnlyFiles.length > 0) {
+        const dtagMatchedIndices = new Set<number>();
+        
+        for (let i = 0; i < localOnlyFiles.length; i++) {
+          const localFile = localOnlyFiles[i];
+          const knownDtag = dtagMap[localFile.path];
+          if (!knownDtag) continue;
+          
+          const remoteFile = remoteByDtag.get(knownDtag);
+          if (!remoteFile) continue;
+          if (remoteFile.data.path === localFile.path) continue;
+          if (!remoteFileMap.has(remoteFile.data.path)) continue;
+          
+          setSyncMessage(`Processing move: ${remoteFile.data.path} -> ${localFile.path}`);
+          try {
+            const result = await engine.moveFile(vault, remoteFile.data.path, localFile.path, localFile.content);
+            vault = result.vault;
+            movedCount++;
+            remoteFileMap.delete(remoteFile.data.path);
+            dtagMatchedIndices.add(i);
+          } catch (err) {
+            console.error(`[Sync] Failed to process d-tag move ${remoteFile.data.path} -> ${localFile.path}:`, err);
+          }
+        }
+        
+        for (let i = localOnlyFiles.length - 1; i >= 0; i--) {
+          if (dtagMatchedIndices.has(i)) {
+            localOnlyFiles.splice(i, 1);
+          }
+        }
+      }
+
+      // Layer 3: SHA-256 content matching (fallback for system file manager moves)
+      if (localOnlyFiles.length > 0 && remoteFileMap.size > 0) {
+        const remoteByChecksum = new Map<string, Array<{ path: string; file: typeof remoteFiles[0] }>>();
+        for (const [path, file] of remoteFileMap) {
+          const cs = file.data.checksum;
+          if (!remoteByChecksum.has(cs)) {
+            remoteByChecksum.set(cs, []);
+          }
+          remoteByChecksum.get(cs)!.push({ path, file });
+        }
+
+        const matchedLocalIndices = new Set<number>();
+        
+        for (let i = 0; i < localOnlyFiles.length; i++) {
+          const localFile = localOnlyFiles[i];
+          const localChecksum = calculateChecksum(localFile.content);
+          const candidates = remoteByChecksum.get(localChecksum);
+          
+          if (candidates && candidates.length > 0) {
+            const match = candidates.shift()!;
+            if (candidates.length === 0) {
+              remoteByChecksum.delete(localChecksum);
+            }
+            
+            setSyncMessage(`Processing move: ${match.path} -> ${localFile.path}`);
+            try {
+              const result = await engine.moveFile(vault, match.path, localFile.path, localFile.content);
+              vault = result.vault;
+              movedCount++;
+              remoteFileMap.delete(match.path);
+              matchedLocalIndices.add(i);
+            } catch (err) {
+              console.error(`[Sync] Failed to process checksum move ${match.path} -> ${localFile.path}:`, err);
+            }
+          }
+        }
+        
+        for (let i = localOnlyFiles.length - 1; i >= 0; i--) {
+          if (matchedLocalIndices.has(i)) {
+            localOnlyFiles.splice(i, 1);
+          }
+        }
+      }
+
+      // Upload remaining local-only files (truly new files)
+      for (const localFile of localOnlyFiles) {
+        setSyncMessage(`Uploading ${localFile.path}... (${uploadedCount + 1} files)`);
+        const result = await engine.publishFile(vault, localFile.path, localFile.content);
+        vault = result.vault;
+        uploadedCount++;
+        
+        if (uploadedCount > 0) {
+          await new Promise(resolve => setTimeout(resolve, UPLOAD_DELAY_MS));
+        }
+      }
 
       // Download remote-only files (files on Nostr but not locally)
       for (const [path, remoteFile] of remoteFileMap) {
@@ -1449,12 +1576,20 @@ const Settings: Component<SettingsProps> = (props) => {
         downloadedCount++;
       }
 
+      // Persist the d-tag map from the final vault state
+      const updatedDtagMap: Record<string, string> = {};
+      for (const fileEntry of vault.data.files) {
+        updatedDtagMap[fileEntry.path] = fileEntry.d;
+      }
+      localStorage.setItem('file_dtag_map', JSON.stringify(updatedDtagMap));
+
       setSyncStatus('success');
       const totalSynced = vault.data.files?.length || 0;
       const parts = [];
       if (uploadedCount > 0) parts.push(`${uploadedCount} uploaded`);
       if (downloadedCount > 0) parts.push(`${downloadedCount} downloaded`);
       if (deletedCount > 0) parts.push(`${deletedCount} deleted`);
+      if (movedCount > 0) parts.push(`${movedCount} moved`);
       if (parts.length === 0) {
         setSyncMessage(`Sync complete: all ${totalSynced} files up to date`);
       } else {

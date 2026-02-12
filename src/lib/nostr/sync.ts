@@ -472,6 +472,86 @@ export class SyncEngine {
   }
 
   /**
+   * Move/rename a file in the vault index, preserving its d-tag identity.
+   * Re-publishes the file event with the updated path and updates the vault index.
+   */
+  async moveFile(
+    vault: Vault,
+    oldPath: string,
+    newPath: string,
+    content: string
+  ): Promise<{ file: SyncedFile; vault: Vault }> {
+    this.ensureIdentity();
+
+    const existingEntry = vault.data.files.find(f => f.path === oldPath);
+    if (!existingEntry) {
+      // File not found at old path - treat as a new file
+      return this.publishFile(vault, newPath, content);
+    }
+
+    // Re-publish with the same d-tag but new path
+    const now = Math.floor(Date.now() / 1000);
+    const checksum = calculateChecksum(content);
+    const version = existingEntry.version + 1;
+
+    const payload: FilePayload = {
+      path: newPath,
+      content,
+      checksum,
+      version,
+      modified: now,
+      previousEventId: existingEntry.eventId,
+      contentType: 'text/markdown',
+    };
+
+    const encryptedContent = await this.encryptContent(JSON.stringify(payload));
+
+    const event = await this.signEvent({
+      kind: KIND_FILE,
+      created_at: now,
+      tags: [
+        ['d', existingEntry.d],
+        ['encrypted', ENCRYPTION_METHOD],
+      ],
+      content: encryptedContent,
+    });
+
+    await this.publishEvent(event);
+
+    const syncedFile: SyncedFile = {
+      eventId: event.id,
+      d: existingEntry.d,
+      data: payload,
+      createdAt: now,
+    };
+
+    // Update vault index: remove old entry, add new one with updated path
+    const fileEntry: VaultFileEntry = {
+      eventId: event.id,
+      d: existingEntry.d,
+      path: newPath,
+      checksum,
+      version,
+      modified: now,
+    };
+
+    const updatedFiles = vault.data.files.filter(f => f.d !== existingEntry.d);
+    updatedFiles.push(fileEntry);
+
+    const updatedVault: Vault = {
+      ...vault,
+      data: {
+        ...vault.data,
+        files: updatedFiles,
+      },
+    };
+
+    const savedVault = await this.updateVaultIndex(updatedVault);
+
+    return { file: syncedFile, vault: savedVault };
+  }
+
+  /**
    * Delete a file (add tombstone)
    */
   async deleteFile(vault: Vault, path: string): Promise<Vault> {
