@@ -1,6 +1,7 @@
 import { Component, createSignal, createEffect, For, Show, onMount, onCleanup } from 'solid-js';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
+import { isMobile } from '../lib/platform';
 
 interface FileEntry {
   name: string;
@@ -189,10 +190,26 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
   const handleContextMenu = (e: MouseEvent, path: string, isDir: boolean) => {
     e.preventDefault();
-    // Check if menu would overflow bottom of screen - estimate menu height ~400px
     const menuHeight = 400;
-    const openUpward = e.clientY + menuHeight > window.innerHeight;
-    setContextMenu({ x: e.clientX, y: e.clientY, path, isDir, openUpward });
+    const menuWidth = 200;
+    const margin = 8;
+
+    let x = e.clientX;
+    let y = e.clientY;
+
+    // On mobile, center the menu horizontally and position from the touch point
+    if (isMobile()) {
+      x = Math.max(margin, Math.min(x, window.innerWidth - menuWidth - margin));
+      y = Math.max(margin, Math.min(y, window.innerHeight - margin));
+    }
+
+    // Check if menu would overflow bottom of screen
+    const openUpward = y + menuHeight > window.innerHeight - margin;
+
+    // Clamp horizontal position so menu doesn't go off-screen
+    x = Math.max(margin, Math.min(x, window.innerWidth - menuWidth - margin));
+
+    setContextMenu({ x, y, path, isDir, openUpward });
   };
 
   const closeContextMenu = () => {
@@ -532,12 +549,12 @@ const Sidebar: Component<SidebarProps> = (props) => {
         <div
           class={`file-tree-item ${itemProps.entry.isDirectory ? 'folder' : ''} ${isActive() ? 'active' : ''} ${isDragging() ? 'dragging' : ''} ${isDropTarget() ? 'drop-target' : ''}`}
           style={{ 'padding-left': `${16 + itemProps.depth * 16}px` }}
-          draggable={!isBeingRenamed()}
-          onDragStart={(e) => handleDragStart(e, itemProps.entry.path)}
-          onDragEnd={handleDragEnd}
-          onDragOver={(e) => handleDragOver(e, itemProps.entry.path, itemProps.entry.isDirectory)}
-          onDragLeave={handleDragLeave}
-          onDrop={(e) => handleDrop(e, itemProps.entry.path)}
+          draggable={!isBeingRenamed() && !isMobile()}
+          onDragStart={(e) => { if (!isMobile()) handleDragStart(e, itemProps.entry.path); }}
+          onDragEnd={() => { if (!isMobile()) handleDragEnd(); }}
+          onDragOver={(e) => { if (!isMobile()) handleDragOver(e, itemProps.entry.path, itemProps.entry.isDirectory); }}
+          onDragLeave={(e) => { if (!isMobile()) handleDragLeave(e); }}
+          onDrop={(e) => { if (!isMobile()) handleDrop(e, itemProps.entry.path); }}
           onClick={() => {
             if (itemProps.entry.isDirectory) {
               toggleFolder(itemProps.entry.path);
@@ -753,6 +770,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
         <div
           class={`sidebar-content ${dropTarget() === props.vaultPath ? 'drop-target' : ''}`}
           onDragOver={(e) => {
+            if (isMobile()) return;
             e.preventDefault();
             const dragged = draggedItem();
             if (!dragged || !props.vaultPath) return;
@@ -762,12 +780,13 @@ const Sidebar: Component<SidebarProps> = (props) => {
             setDropTarget(props.vaultPath);
           }}
           onDragLeave={(e) => {
+            if (isMobile()) return;
             const relatedTarget = e.relatedTarget as HTMLElement;
     if (!relatedTarget || !(e.currentTarget as HTMLElement)?.contains(relatedTarget)) {
               if (dropTarget() === props.vaultPath) setDropTarget(null);
             }
           }}
-          onDrop={handleDropOnRoot}
+          onDrop={(e) => { if (!isMobile()) handleDropOnRoot(e); }}
         >
           <Show
             when={props.vaultPath}
@@ -963,8 +982,8 @@ const Sidebar: Component<SidebarProps> = (props) => {
           style={{ 
             left: `${contextMenu()!.x}px`, 
             ...(contextMenu()!.openUpward 
-              ? { bottom: `${window.innerHeight - contextMenu()!.y}px` }
-              : { top: `${contextMenu()!.y}px` })
+              ? { bottom: `${Math.max(8, window.innerHeight - contextMenu()!.y)}px`, 'max-height': `${contextMenu()!.y - 8}px` }
+              : { top: `${contextMenu()!.y}px`, 'max-height': `${window.innerHeight - contextMenu()!.y - 8}px` })
           }}
         >
           {/* File-specific options */}

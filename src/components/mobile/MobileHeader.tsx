@@ -17,6 +17,7 @@ interface MobileHeaderProps {
   syncStatus?: 'off' | 'idle' | 'syncing' | 'error';
   unreadNotifications?: number;
   isDirty?: boolean;
+  onMoreClick?: () => void;
 }
 
 const MobileHeader: Component<MobileHeaderProps> = (props) => {
@@ -66,22 +67,6 @@ const MobileHeader: Component<MobileHeaderProps> = (props) => {
           </button>
         </Show>
 
-        <Show when={props.onSearchClick}>
-          <button 
-            class="mobile-header-btn"
-            onClick={() => {
-              impactLight();
-              props.onSearchClick?.();
-            }}
-            aria-label="Search"
-          >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="11" cy="11" r="8"></circle>
-              <path d="m21 21-4.35-4.35"></path>
-            </svg>
-          </button>
-        </Show>
-
         <Show when={props.onSyncClick && props.syncStatus !== 'off'}>
           <button 
             class={`mobile-header-btn sync-btn ${props.syncStatus}`}
@@ -104,6 +89,24 @@ const MobileHeader: Component<MobileHeaderProps> = (props) => {
               <path d="M3 3v5h5"></path>
               <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path>
               <path d="M16 16h5v5"></path>
+            </svg>
+          </button>
+        </Show>
+
+        {/* More menu - access to panels (Outline, Backlinks, Graph, Properties) */}
+        <Show when={props.onMoreClick}>
+          <button
+            class="mobile-header-btn"
+            onClick={() => {
+              impactLight();
+              props.onMoreClick?.();
+            }}
+            aria-label="More options"
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="1"></circle>
+              <circle cx="12" cy="5" r="1"></circle>
+              <circle cx="12" cy="19" r="1"></circle>
             </svg>
           </button>
         </Show>

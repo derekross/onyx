@@ -2257,7 +2257,7 @@ pub fn run() {
         Arc::new(Mutex::new(OpenCodeServerState::default()));
     let opencode_server_state_clone = opencode_server_state.clone();
 
-    let builder = tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
@@ -2265,10 +2265,14 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_clipboard_manager::init());
+
+    // Desktop-only plugins
+    #[cfg(desktop)]
+    {
         // Single instance plugin - ensures only one instance runs
         // When a second instance is launched, it passes args to the first instance
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // Focus the main window
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_focus();
@@ -2283,6 +2287,7 @@ pub fn run() {
         }))
         // Window state plugin - remembers window position and size
         .plugin(tauri_plugin_window_state::Builder::default().build());
+    }
 
     // Mobile-only plugins
     #[cfg(mobile)]

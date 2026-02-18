@@ -87,85 +87,74 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
           if-no-files-found: ignore
 
-  # TODO: Enable Android build once signing is configured
-  # build-android:
-  #   runs-on: ubuntu-latest
-  #
-  #   steps:
-  #     - name: Checkout repository
-  #       uses: actions/checkout@v4
-  #
-  #     - name: Setup Node.js
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: 20
-  #         cache: 'npm'
-  #
-  #     - name: Setup Java
-  #       uses: actions/setup-java@v4
-  #       with:
-  #         distribution: 'temurin'
-  #         java-version: '17'
-  #
-  #     - name: Setup Android SDK
-  #       uses: android-actions/setup-android@v3
-  #
-  #     - name: Install Android NDK
-  #       run: |
-  #         sdkmanager --install "ndk;27.0.11902837"
-  #         echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.11902837" >> $GITHUB_ENV
-  #
-  #     - name: Install Rust toolchain
-  #       uses: dtolnay/rust-toolchain@stable
-  #       with:
-  #         targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
-  #
-  #     - name: Rust cache
-  #       uses: Swatinem/rust-cache@v2
-  #       with:
-  #         workspaces: src-tauri
-  #
-  #     - name: Install npm dependencies
-  #       run: npm ci
-  #
-  #     - name: Decode keystore
-  #       env:
-  #         KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-  #       run: |
-  #         if [ -n "$KEYSTORE_BASE64" ]; then
-  #           echo "$KEYSTORE_BASE64" | base64 -d > ${{ runner.temp }}/keystore.jks
-  #           echo "KEYSTORE_PATH=${{ runner.temp }}/keystore.jks" >> $GITHUB_ENV
-  #         fi
-  #
-  #     - name: Build Android APK
-  #       run: npx tauri android build --apk true
-  #       env:
-  #         NDK_HOME: ${{ env.NDK_HOME }}
-  #         KEYSTORE_PATH: ${{ env.KEYSTORE_PATH }}
-  #         KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-  #         KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-  #         KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-  #
-  #     - name: Build Android AAB
-  #       run: npx tauri android build --aab true
-  #       env:
-  #         NDK_HOME: ${{ env.NDK_HOME }}
-  #         KEYSTORE_PATH: ${{ env.KEYSTORE_PATH }}
-  #         KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-  #         KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-  #         KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-  #
-  #     - name: Upload Android artifacts
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: onyx-android
-  #         path: |
-  #           src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-  #           src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
-  #         if-no-files-found: ignore
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: |
+          sdkmanager --install "ndk;28.0.13004108"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/28.0.13004108" >> $GITHUB_ENV
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > ${{ runner.temp }}/keystore.jks
+            echo "KEYSTORE_PATH=${{ runner.temp }}/keystore.jks" >> $GITHUB_ENV
+          fi
+
+      - name: Build Android APK
+        run: npx tauri android build --apk true
+        env:
+          NDK_HOME: ${{ env.NDK_HOME }}
+          KEYSTORE_PATH: ${{ env.KEYSTORE_PATH }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: onyx-android
+          path: |
+            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: ignore
 
   release:
-    needs: [build]
+    needs: [build, build-android]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release == 'true'
 

@@ -214,6 +214,7 @@ const App: Component = () => {
   const platformInfo = usePlatformInfo();
   const [mobileDrawerOpen, setMobileDrawerOpen] = createSignal(false);
   const [mobileNavTab, setMobileNavTab] = createSignal<MobileNavTab>('files');
+  const [mobileMoreMenu, setMobileMoreMenu] = createSignal(false);
   const isMobileApp = () => {
     const info = platformInfo();
     return info?.platform === 'android' || info?.platform === 'ios';
@@ -2289,11 +2290,69 @@ const App: Component = () => {
           title={currentFileTitle()}
           isDirty={currentTab()?.isDirty}
           onMenuClick={() => setMobileDrawerOpen(true)}
-          onNotificationsClick={() => setShowNotifications(true)}
+          onNotificationsClick={() => setShowNotifications(!showNotifications())}
           unreadNotifications={unreadShareCount()}
           onSyncClick={() => handleStatusBarSync()}
           syncStatus={syncStatus()}
+          onMoreClick={() => setMobileMoreMenu(!mobileMoreMenu())}
         />
+      </Show>
+
+      {/* Mobile More Menu - panel toggles */}
+      <Show when={isMobileApp() && mobileMoreMenu()}>
+        <div class="mobile-more-backdrop" onClick={() => setMobileMoreMenu(false)}>
+          <div class="mobile-more-menu" onClick={(e) => e.stopPropagation()}>
+            <div
+              class={`mobile-more-item ${showOutline() ? 'active' : ''}`}
+              onClick={() => { setShowOutline(!showOutline()); setMobileMoreMenu(false); }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="8" y1="6" x2="21" y2="6"></line>
+                <line x1="8" y1="12" x2="21" y2="12"></line>
+                <line x1="8" y1="18" x2="21" y2="18"></line>
+                <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                <line x1="3" y1="18" x2="3.01" y2="18"></line>
+              </svg>
+              <span>Outline</span>
+            </div>
+            <div
+              class={`mobile-more-item ${showBacklinks() ? 'active' : ''}`}
+              onClick={() => { setShowBacklinks(!showBacklinks()); setMobileMoreMenu(false); }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 17H7A5 5 0 0 1 7 7h2"></path>
+                <path d="M15 7h2a5 5 0 1 1 0 10h-2"></path>
+                <line x1="8" y1="12" x2="16" y2="12"></line>
+              </svg>
+              <span>Backlinks</span>
+            </div>
+            <div
+              class={`mobile-more-item ${showGraphView() ? 'active' : ''}`}
+              onClick={() => { setShowGraphView(!showGraphView()); setMobileMoreMenu(false); }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="6" cy="6" r="3"></circle>
+                <circle cx="18" cy="6" r="3"></circle>
+                <circle cx="6" cy="18" r="3"></circle>
+                <circle cx="18" cy="18" r="3"></circle>
+                <line x1="8.5" y1="7.5" x2="15.5" y2="16.5"></line>
+                <line x1="15.5" y1="7.5" x2="8.5" y2="16.5"></line>
+              </svg>
+              <span>Graph View</span>
+            </div>
+            <div
+              class={`mobile-more-item ${showProperties() ? 'active' : ''}`}
+              onClick={() => { setShowProperties(!showProperties()); setMobileMoreMenu(false); }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+              </svg>
+              <span>Properties</span>
+            </div>
+          </div>
+        </div>
       </Show>
 
       {/* Mobile Drawer - Only shown on mobile */}
@@ -2301,52 +2360,6 @@ const App: Component = () => {
         <MobileDrawer
           isOpen={mobileDrawerOpen()}
           onClose={() => setMobileDrawerOpen(false)}
-          title={sidebarView() === 'files' ? (vaultPath()?.replace(/\\/g, '/').split('/').pop() || 'Files') : sidebarView() === 'search' ? 'Search' : 'Bookmarks'}
-          headerAction={
-            sidebarView() === 'files' && vaultPath() ? (
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  class="mobile-drawer-action"
-                  onClick={async () => {
-                    // Create a new folder at vault root
-                    const folderName = `New Folder ${Date.now()}`;
-                    const folderPath = `${vaultPath()}/${folderName}`;
-                    try {
-                      await invoke('create_folder', { path: folderPath });
-                      if (refreshSidebar) refreshSidebar();
-                      await impactLight();
-                    } catch (err) {
-                      console.error('[App] Failed to create folder:', err);
-                    }
-                  }}
-                  title="New Folder"
-                >
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                    <line x1="12" y1="11" x2="12" y2="17"/>
-                    <line x1="9" y1="14" x2="15" y2="14"/>
-                  </svg>
-                </button>
-                <button
-                  class="mobile-drawer-action"
-                  onClick={async () => {
-                    // Create a new note
-                    await createNewNote();
-                    // Close the drawer after creating
-                    setMobileDrawerOpen(false);
-                  }}
-                  title="New Note"
-                >
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                    <polyline points="14 2 14 8 20 8"/>
-                    <line x1="12" y1="18" x2="12" y2="12"/>
-                    <line x1="9" y1="15" x2="15" y2="15"/>
-                  </svg>
-                </button>
-              </div>
-            ) : undefined
-          }
         >
           <Sidebar
             onFileSelect={(path) => {
