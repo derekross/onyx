@@ -1992,6 +1992,122 @@ mod keyring_commands {
     }
 }
 
+// Generic OpenAI-compatible provider proxy commands (bypasses CORS)
+// Works with MapleAI Proxy, Ollama, LM Studio, vLLM, or any OpenAI-compatible API.
+
+#[tauri::command]
+async fn custom_provider_request(url: String, api_key: String, body: String) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let mut request = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .timeout(Duration::from_secs(120));
+
+    if !api_key.is_empty() {
+        request = request.header("Authorization", format!("Bearer {}", api_key));
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Server returned {}: {}", status, body));
+    }
+
+    response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))
+}
+
+#[tauri::command]
+async fn custom_provider_stream(
+    app: AppHandle,
+    request_id: String,
+    url: String,
+    api_key: String,
+    body: String,
+) -> Result<(), String> {
+    use futures_util::StreamExt;
+
+    let client = reqwest::Client::new();
+    let mut request = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .timeout(Duration::from_secs(300));
+
+    if !api_key.is_empty() {
+        request = request.header("Authorization", format!("Bearer {}", api_key));
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Server returned {}: {}", status, body));
+    }
+
+    let mut stream = response.bytes_stream();
+    let event_name = format!("custom-provider-stream-{}", request_id);
+
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(bytes) => {
+                if let Ok(text) = String::from_utf8(bytes.to_vec()) {
+                    let _ = app.emit(&event_name, text);
+                }
+            }
+            Err(e) => {
+                let _ = app.emit(&event_name, format!("__ERROR__:{}", e));
+                break;
+            }
+        }
+    }
+
+    // Signal end of stream
+    let _ = app.emit(&event_name, "__DONE__");
+    Ok(())
+}
+
+#[tauri::command]
+async fn custom_provider_list_models(url: String, api_key: String) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let mut request = client
+        .get(&url)
+        .header("Content-Type", "application/json")
+        .timeout(Duration::from_secs(15));
+
+    if !api_key.is_empty() {
+        request = request.header("Authorization", format!("Bearer {}", api_key));
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Server returned {}: {}", status, body));
+    }
+
+    response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))
+}
+
 // OpenClaw HTTP proxy commands (bypasses CORS)
 #[tauri::command]
 async fn openclaw_request(url: String, token: String, body: String) -> Result<String, String> {
@@ -2462,6 +2578,9 @@ pub fn run() {
             openclaw_request,
             openclaw_stream,
             openclaw_gateway_request,
+            custom_provider_request,
+            custom_provider_stream,
+            custom_provider_list_models,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
