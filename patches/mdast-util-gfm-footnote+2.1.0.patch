@@ -1,0 +1,14 @@
+diff --git a/node_modules/mdast-util-gfm-footnote/lib/index.js b/node_modules/mdast-util-gfm-footnote/lib/index.js
+index 1930f57..666778a 100644
+--- a/node_modules/mdast-util-gfm-footnote/lib/index.js
++++ b/node_modules/mdast-util-gfm-footnote/lib/index.js
+@@ -164,7 +164,8 @@ export function gfmFootnoteToMarkdown(options) {
+   return {
+     handlers: {footnoteDefinition, footnoteReference},
+     // This is on by default already.
+-    unsafe: [{character: '[', inConstruct: ['label', 'phrasing', 'reference']}]
++    // Disabled: [ escaping removed for note-taking (wikilinks)
++    unsafe: []
+   }
+ 
+   /**

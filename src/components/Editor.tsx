@@ -80,6 +80,10 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
   let unlistenDragDrop: UnlistenFn | null = null;
   // Track the last content we set in the editor to detect external changes
   let lastEditorContent: string = '';
+  // Source editor state: completely independent from Milkdown.
+  // Reads/writes directly to disk, never touches Milkdown's serializer.
+  const [sourceContent, setSourceContent] = createSignal('');
+  let sourceAutoSaveTimeout: number | null = null;
 
   const saveFile = async () => {
     if (!props.filePath || saving()) return;
@@ -154,9 +158,11 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       // Configure listener after the plugin is loaded
       .config((ctx) => {
         ctx.get(listenerCtx).markdownUpdated((ctx, markdown, _prevMarkdown) => {
-          // Track the content for detecting external changes
-          lastEditorContent = markdown;
-          props.onContentChange(markdown);
+          // Strip backslash escapes from [ ] _ ! that remark-stringify adds.
+          // These are literal in Milkdown (links/emphasis/images are nodes).
+          const cleaned = markdown.replace(/\\([[\]_!])/g, '$1');
+          lastEditorContent = cleaned;
+          props.onContentChange(cleaned);
 
           // Export headings from plugin state
           const view = ctx.get(editorViewCtx);
@@ -687,9 +693,58 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
         <div class="editor-container source-editor">
           <textarea
             class="source-textarea"
-            value={props.content}
-            onInput={(e) => props.onContentChange(e.currentTarget.value)}
-            spellcheck={localStorage.getItem('spell_check') !== 'false'}
+            ref={(el) => {
+              // Load content directly from disk when source view mounts.
+              // This completely bypasses Milkdown's serializer.
+              if (props.filePath) {
+                invoke<string>('read_file', { path: props.filePath }).then((diskContent) => {
+                  el.value = diskContent;
+                  setSourceContent(diskContent);
+                }).catch((err) => {
+                  console.error('[SourceEditor] Failed to read file:', err);
+                  // Fall back to tab content if disk read fails
+                  el.value = props.content || '';
+                  setSourceContent(props.content || '');
+                });
+              } else {
+                el.value = props.content || '';
+                setSourceContent(props.content || '');
+              }
+
+              el.spellcheck = localStorage.getItem('spell_check') !== 'false';
+
+              el.addEventListener('input', () => {
+                const value = el.value;
+                setSourceContent(value);
+                // Update tab content so the app state stays in sync
+                props.onContentChange(value);
+
+                // Auto-save to disk after 2 seconds of no typing
+                if (sourceAutoSaveTimeout) clearTimeout(sourceAutoSaveTimeout);
+                sourceAutoSaveTimeout = window.setTimeout(async () => {
+                  if (props.filePath) {
+                    try {
+                      await invoke('write_file', { path: props.filePath, content: value });
+                    } catch (err) {
+                      console.error('[SourceEditor] Failed to save:', err);
+                    }
+                  }
+                }, 2000);
+              });
+
+              el.addEventListener('keydown', (e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                  e.preventDefault();
+                  // Immediate save on Ctrl+S
+                  if (sourceAutoSaveTimeout) clearTimeout(sourceAutoSaveTimeout);
+                  if (props.filePath) {
+                    invoke('write_file', { path: props.filePath, content: el.value }).catch(
+                      (err) => console.error('[SourceEditor] Failed to save:', err)
+                    );
+                  }
+                }
+              });
+            }}
           />
         </div>
       </Show>

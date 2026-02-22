@@ -1,0 +1,53 @@
+diff --git a/node_modules/mdast-util-to-markdown/lib/unsafe.js b/node_modules/mdast-util-to-markdown/lib/unsafe.js
+index c5c5d4a..6cb1c01 100644
+--- a/node_modules/mdast-util-to-markdown/lib/unsafe.js
++++ b/node_modules/mdast-util-to-markdown/lib/unsafe.js
+@@ -57,12 +57,13 @@ export const unsafe = [
+   },
+   // An exclamation mark can start an image, if it is followed by a link or
+   // a link reference.
+-  {
+-    character: '!',
+-    after: '\\[',
+-    inConstruct: 'phrasing',
+-    notInConstruct: fullPhrasingSpans
+-  },
++  // Disabled: ! before [ escaping removed for note-taking (embeds)
++  // {
++  //   character: '!',
++  //   after: '\\[',
++  //   inConstruct: 'phrasing',
++  //   notInConstruct: fullPhrasingSpans
++  // },
+   // A quote can break out of a title.
+   {character: '"', inConstruct: 'titleQuote'},
+   // A number sign could start an ATX heading if it starts a line.
+@@ -118,19 +119,22 @@ export const unsafe = [
+   {character: '>', inConstruct: 'destinationLiteral'},
+   // Question mark and at sign are not used in markdown for constructs.
+   // A left bracket can start definitions, references, labels,
+-  {atBreak: true, character: '['},
+-  {character: '[', inConstruct: 'phrasing', notInConstruct: fullPhrasingSpans},
+-  {character: '[', inConstruct: ['label', 'reference']},
++  // Disabled: [ escaping removed for note-taking (wikilinks)
++  // {atBreak: true, character: '['},
++  // {character: '[', inConstruct: 'phrasing', notInConstruct: fullPhrasingSpans},
++  // {character: '[', inConstruct: ['label', 'reference']},
+   // A backslash can start an escape (when followed by punctuation) or a
+   // hard break (when followed by an eol).
+   // Note: typical escapes are handled in `safe`!
+   {character: '\\', after: '[\\r\\n]', inConstruct: 'phrasing'},
+   // A right bracket can exit labels.
+-  {character: ']', inConstruct: ['label', 'reference']},
++  // Disabled: ] escaping removed for note-taking (wikilinks)
++  // {character: ']', inConstruct: ['label', 'reference']},
+   // Caret is not used in markdown for constructs.
+   // An underscore can start emphasis, strong, or a thematic break.
+-  {atBreak: true, character: '_'},
+-  {character: '_', inConstruct: 'phrasing', notInConstruct: fullPhrasingSpans},
++  // Disabled: _ escaping removed for note-taking (underscores in file names)
++  // {atBreak: true, character: '_'},
++  // {character: '_', inConstruct: 'phrasing', notInConstruct: fullPhrasingSpans},
+   // A grave accent can start code (fenced or text), or it can break out of
+   // a grave accent code fence.
+   {atBreak: true, character: '`'},

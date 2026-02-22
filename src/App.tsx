@@ -1219,8 +1219,13 @@ const App: Component = () => {
     if (!tab) return;
 
     try {
-      await invoke('write_file', { path: tab.path, content: tab.content });
-      setTabs(tabs().map((t, i) => i === index ? { ...t, isDirty: false } : t));
+      // Strip remark-stringify escapes from [ ] _ ! before writing to disk.
+      // Milkdown's serializer escapes these characters in text nodes because
+      // they have meaning in raw markdown, but in the WYSIWYG model they are
+      // literal (links, emphasis, images are structural nodes).
+      const content = tab.content.replace(/\\([[\]_!])/g, '$1');
+      await invoke('write_file', { path: tab.path, content });
+      setTabs(tabs().map((t, i) => i === index ? { ...t, content, isDirty: false } : t));
     } catch (err) {
       console.error('Failed to save:', err);
     }
@@ -1230,8 +1235,14 @@ const App: Component = () => {
     const idx = activeTabIndex();
     if (idx < 0) return;
 
+    // Strip backslash escapes that Milkdown's remark-stringify adds to [ ] _ !
+    // These characters are literal in Milkdown's WYSIWYG model (links, emphasis,
+    // images are structural nodes). Without this, wikilinks like [[note]] get
+    // saved to disk as \[\[note\]\].
+    const cleaned = content.replace(/\\([[\]_!])/g, '$1');
+
     const tabPath = tabs()[idx]?.path;
-    setTabs(tabs().map((t, i) => i === idx ? { ...t, content, isDirty: true } : t));
+    setTabs(tabs().map((t, i) => i === idx ? { ...t, content: cleaned, isDirty: true } : t));
 
     // Auto-save after 2 seconds of no typing
     // Capture path instead of index to avoid saving to wrong tab if tabs change
@@ -2928,7 +2939,24 @@ const App: Component = () => {
             <Show when={currentTab()}>
               <button
                 class="status-item view-mode-toggle"
-                onClick={() => {
+                onClick={async () => {
+                  // Save current tab to disk before switching modes so the
+                  // other editor loads the latest content from disk.
+                  const idx = activeTabIndex();
+                  if (idx >= 0) {
+                    await saveTab(idx);
+                    // Reload content from disk into tab state so the other
+                    // editor gets the canonical disk version
+                    const tab = tabs()[idx];
+                    if (tab?.path) {
+                      try {
+                        const diskContent = await invoke<string>('read_file', { path: tab.path });
+                        setTabs(tabs().map((t, i) => i === idx ? { ...t, content: diskContent, isDirty: false } : t));
+                      } catch (err) {
+                        console.error('Failed to reload content on mode switch:', err);
+                      }
+                    }
+                  }
                   const newMode = editorViewMode() === 'live' ? 'source' : 'live';
                   setEditorViewMode(newMode);
                   localStorage.setItem('editor_view_mode', newMode);

@@ -192,6 +192,37 @@ export const wikilinkPlugin = $prose(() => {
         return this.getState(state);
       },
 
+      // When the user types the closing ]] of a wikilink, automatically
+      // insert a space after it so the cursor escapes the decoration
+      // and subsequent typing is outside the wikilink.
+      handleTextInput(view, from, to, text) {
+        // Check if the user just typed ']' and the character before is also ']'
+        // and the two characters before that complete a wikilink pattern
+        if (text === ']') {
+          const { state } = view;
+          const pos = from;
+          // Need at least 3 chars before: something + ] (we're adding the second ])
+          if (pos >= 3) {
+            const before = state.doc.textBetween(pos - 1, pos);
+            if (before === ']') {
+              // Check if this completes a wikilink by looking for [[ before
+              // Search backwards for [[
+              const start = Math.max(0, pos - 200);
+              const textBefore = state.doc.textBetween(start, pos);
+              const lastOpen = textBefore.lastIndexOf('[[');
+              if (lastOpen >= 0) {
+                // This ] completes a ]] that closes a wikilink.
+                // Insert the ] and a space, then place cursor after the space.
+                const tr = state.tr.insertText('] ', from, to);
+                view.dispatch(tr);
+                return true;
+              }
+            }
+          }
+        }
+        return false;
+      },
+
       handleClick(view, _pos, event) {
         const target = event.target as HTMLElement;
 
