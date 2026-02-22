@@ -1,0 +1,26 @@
+name: Onyx
+summary: Private, encrypted note-taking app with AI productivity tools
+description: |
+  Onyx is a private, encrypted note-taking application built on the Nostr
+  protocol with integrated AI productivity tools. Your notes are encrypted
+  with your keys — no server, no company, no third party can read your content.
+
+  Features:
+  - End-to-end encrypted notes using Nostr
+  - AI-powered productivity (cloud and local model support)
+  - Cross-platform (Android, Desktop, macOS)
+  - Self-custodial — you own your data
+license: MIT
+repository: https://github.com/derekross/onyx
+website: https://onyxnotes.dev
+assets:
+  - app-universal-release.apk
+metadata_sources:
+  - github
+tags:
+  - nostr
+  - notes
+  - encryption
+  - privacy
+  - ai
+  - productivity
