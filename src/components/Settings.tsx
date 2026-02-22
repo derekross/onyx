@@ -71,7 +71,7 @@ import {
   type TemplatesConfig,
 } from '../lib/templates';
 
-type SettingsSection = 'general' | 'editor' | 'files' | 'appearance' | 'hotkeys' | 'opencode' | 'openclaw' | 'productivity' | 'sync' | 'nostr' | 'about';
+type SettingsSection = 'general' | 'editor' | 'files' | 'appearance' | 'hotkeys' | 'opencode' | 'openclaw' | 'customprovider' | 'productivity' | 'sync' | 'nostr' | 'about';
 type LoginTab = 'generate' | 'import';
 
 interface SettingsProps {
@@ -123,6 +123,7 @@ const sections: SettingsSectionItem[] = [
   { id: 'hotkeys', label: 'Hotkeys', icon: 'M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z' },
   { id: 'opencode', label: 'OpenCode', icon: 'M8 9l3 3-3 3 M13 15h3 M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z' },
   { id: 'openclaw', label: 'OpenClaw', icon: 'm175.656 22.375-48.47 82.094c-23.017 4.384-43.547 11.782-60.124 22.374-24.436 15.613-40.572 37.414-45.5 67.875-4.79 29.62 1.568 68.087 24.125 116.093 93.162 22.88 184.08-10.908 257.25-18.813 37.138-4.012 71.196-.898 96.344 22.97 22.33 21.19 36.21 56.808 41.908 113.436 29.246-35.682 44.538-69.065 49.343-99.594 5.543-35.207-2.526-66.97-20.31-95.593-8.52-13.708-19.368-26.618-32-38.626l14.217-33-41.218 10.625c-8.637-6.278-17.765-12.217-27.314-17.782l-7.03-59.782-38.157 37.406a423.505 423.505 0 0 0-38.158-13.812l-8.375-71.28-57.625 56.5c-9.344-1.316-18.625-2.333-27.812-2.97l-31.094-78.125zM222 325.345c-39.146 7.525-82.183 14.312-127.156 11.686 47.403 113.454 207.056 224.082 260.125 87-101.18 33.84-95.303-49.595-132.97-98.686z' },
+  { id: 'customprovider', label: 'Custom Provider', icon: 'M12 2L2 7l10 5 10-5-10-5z M2 17l10 5 10-5 M2 12l10 5 10-5' },
   { id: 'productivity', label: 'Productivity', icon: 'M13 2L3 14h9l-1 8 10-12h-9l1-8z' },
   { id: 'sync', label: 'Sync', icon: 'M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8 M21 3v5h-5' },
   { id: 'nostr', label: 'Nostr', icon: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z' },
@@ -142,7 +143,7 @@ const Settings: Component<SettingsProps> = (props) => {
   // Filter sections based on platform - hide OpenCode, Productivity, and Hotkeys on mobile
   const filteredSections = () => {
     if (isMobileApp()) {
-      return sections.filter(s => s.id !== 'opencode' && s.id !== 'openclaw' && s.id !== 'productivity' && s.id !== 'hotkeys');
+      return sections.filter(s => s.id !== 'opencode' && s.id !== 'openclaw' && s.id !== 'customprovider' && s.id !== 'productivity' && s.id !== 'hotkeys');
     }
     return sections;
   };
@@ -370,6 +371,114 @@ const Settings: Component<SettingsProps> = (props) => {
     } catch (err: any) {
       setOpenClawTestStatus('error');
       setOpenClawTestError(err.message || err || 'Connection failed');
+    }
+  };
+
+  // Custom Provider state
+  const [customProviderUrl, setCustomProviderUrl] = createSignal<string>(
+    localStorage.getItem('custom_provider_url') || ''
+  );
+  const [customProviderApiKey, setCustomProviderApiKey] = createSignal<string>(
+    localStorage.getItem('custom_provider_api_key') || ''
+  );
+  const [customProviderName, setCustomProviderName] = createSignal<string>(
+    localStorage.getItem('custom_provider_name') || ''
+  );
+  const [customProviderApiKeyVisible, setCustomProviderApiKeyVisible] = createSignal(false);
+  const [customProviderModels, setCustomProviderModels] = createSignal<string[]>(
+    (() => {
+      try {
+        const stored = localStorage.getItem('custom_provider_models');
+        return stored ? JSON.parse(stored) : [];
+      } catch { return []; }
+    })()
+  );
+  const [customProviderModel, setCustomProviderModel] = createSignal<string>(
+    localStorage.getItem('custom_provider_model') || ''
+  );
+  const [customProviderTestStatus, setCustomProviderTestStatus] = createSignal<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [customProviderTestError, setCustomProviderTestError] = createSignal<string | null>(null);
+  const [customProviderModelsLoading, setCustomProviderModelsLoading] = createSignal(false);
+
+  const handleCustomProviderUrlChange = (value: string) => {
+    setCustomProviderUrl(value);
+    localStorage.setItem('custom_provider_url', value);
+    window.dispatchEvent(new CustomEvent('custom-provider-settings-changed'));
+  };
+
+  const handleCustomProviderApiKeyChange = (value: string) => {
+    setCustomProviderApiKey(value);
+    localStorage.setItem('custom_provider_api_key', value);
+    window.dispatchEvent(new CustomEvent('custom-provider-settings-changed'));
+  };
+
+  const handleCustomProviderNameChange = (value: string) => {
+    setCustomProviderName(value);
+    localStorage.setItem('custom_provider_name', value);
+    window.dispatchEvent(new CustomEvent('custom-provider-settings-changed'));
+  };
+
+  const handleCustomProviderModelChange = (value: string) => {
+    setCustomProviderModel(value);
+    localStorage.setItem('custom_provider_model', value);
+    window.dispatchEvent(new CustomEvent('custom-provider-settings-changed'));
+  };
+
+  const handleFetchCustomProviderModels = async () => {
+    const url = customProviderUrl();
+    if (!url) return;
+
+    setCustomProviderModelsLoading(true);
+    try {
+      const baseUrl = url.replace(/\/+$/, '');
+      const apiKey = customProviderApiKey();
+      const response = await invoke<string>('custom_provider_list_models', {
+        url: `${baseUrl}/v1/models`,
+        apiKey,
+      });
+      const data = JSON.parse(response);
+      const models: string[] = (data.data || []).map((m: { id: string }) => m.id).sort();
+      setCustomProviderModels(models);
+      localStorage.setItem('custom_provider_models', JSON.stringify(models));
+      // Auto-select first model if none selected
+      if (!customProviderModel() && models.length > 0) {
+        handleCustomProviderModelChange(models[0]);
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setCustomProviderTestError(`Failed to fetch models: ${message}`);
+      setCustomProviderTestStatus('error');
+    } finally {
+      setCustomProviderModelsLoading(false);
+    }
+  };
+
+  const handleTestCustomProviderConnection = async () => {
+    const url = customProviderUrl();
+    if (!url) return;
+
+    setCustomProviderTestStatus('testing');
+    setCustomProviderTestError(null);
+
+    try {
+      const baseUrl = url.replace(/\/+$/, '');
+      const apiKey = customProviderApiKey();
+      const model = customProviderModel() || 'test';
+      await invoke('custom_provider_request', {
+        url: `${baseUrl}/v1/chat/completions`,
+        apiKey,
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: 'ping' }],
+          stream: false,
+          max_tokens: 1,
+        }),
+      });
+      setCustomProviderTestStatus('success');
+    } catch (err: unknown) {
+      setCustomProviderTestStatus('error');
+      const message = err instanceof Error ? err.message : String(err);
+      setCustomProviderTestError(message || 'Connection failed');
     }
   };
 
@@ -3420,6 +3529,189 @@ const Settings: Component<SettingsProps> = (props) => {
                       </div>
                     </Show>
                   </Show>
+                </div>
+              </div>
+            </Show>
+
+            {/* Custom Provider */}
+            <Show when={activeSection() === 'customprovider'}>
+              <div class="settings-section">
+                <div class="settings-section-title">Custom Provider Configuration</div>
+
+                <div class="settings-notice">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                  </svg>
+                  <p>Connect to any OpenAI-compatible API provider. Works with MapleAI Proxy, Ollama, LM Studio, vLLM, and more.</p>
+                </div>
+
+                <div class="settings-section-title">Display Name</div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">Provider Name</div>
+                    <div class="setting-description">Name shown in the chat panel header</div>
+                  </div>
+                </div>
+                <div class="setting-item column">
+                  <input
+                    type="text"
+                    class="setting-input wide"
+                    placeholder="MapleAI"
+                    value={customProviderName()}
+                    onInput={(e) => handleCustomProviderNameChange(e.currentTarget.value)}
+                  />
+                </div>
+
+                <div class="settings-section-title">Server URL</div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">Base URL</div>
+                    <div class="setting-description">The base URL of your OpenAI-compatible API server</div>
+                  </div>
+                </div>
+                <div class="setting-item column">
+                  <input
+                    type="text"
+                    class="setting-input wide"
+                    placeholder="http://localhost:8080"
+                    value={customProviderUrl()}
+                    onInput={(e) => handleCustomProviderUrlChange(e.currentTarget.value)}
+                  />
+                </div>
+
+                <div class="settings-section-title">API Key</div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">API Key</div>
+                    <div class="setting-description">Optional. Required by some providers (MapleAI, OpenRouter). Not needed for local servers like Ollama.</div>
+                  </div>
+                </div>
+                <div class="setting-item column">
+                  <div class="openclaw-token-input">
+                    <input
+                      type={customProviderApiKeyVisible() ? 'text' : 'password'}
+                      class="setting-input wide"
+                      placeholder="sk-..."
+                      value={customProviderApiKey()}
+                      onInput={(e) => handleCustomProviderApiKeyChange(e.currentTarget.value)}
+                    />
+                    <button
+                      class="token-toggle-btn"
+                      onClick={() => setCustomProviderApiKeyVisible(!customProviderApiKeyVisible())}
+                      title={customProviderApiKeyVisible() ? 'Hide' : 'Show'}
+                    >
+                      <Show when={customProviderApiKeyVisible()} fallback={
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                          <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
+                      }>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                          <line x1="1" y1="1" x2="23" y2="23"></line>
+                        </svg>
+                      </Show>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="settings-section-title">Model</div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">Fetch Available Models</div>
+                    <div class="setting-description">Query the provider's /v1/models endpoint</div>
+                  </div>
+                  <button
+                    class="setting-button"
+                    onClick={handleFetchCustomProviderModels}
+                    disabled={!customProviderUrl() || customProviderModelsLoading()}
+                  >
+                    {customProviderModelsLoading() ? 'Fetching...' : 'Fetch Models'}
+                  </button>
+                </div>
+                <Show when={customProviderModels().length > 0}>
+                  <div class="setting-item">
+                    <div class="setting-info">
+                      <div class="setting-name">Select Model</div>
+                      <div class="setting-description">Choose which model to use for chat completions</div>
+                    </div>
+                    <select
+                      class="setting-select"
+                      value={customProviderModel()}
+                      onChange={(e) => handleCustomProviderModelChange(e.currentTarget.value)}
+                    >
+                      <option value="">Select a model...</option>
+                      <For each={customProviderModels()}>
+                        {(model) => <option value={model}>{model}</option>}
+                      </For>
+                    </select>
+                  </div>
+                </Show>
+                <Show when={customProviderModels().length === 0 && !customProviderModelsLoading()}>
+                  <div class="setting-item">
+                    <div class="setting-info">
+                      <div class="setting-description">No models loaded yet. Enter a URL and click "Fetch Models".</div>
+                    </div>
+                  </div>
+                </Show>
+
+                <div class="settings-section-title">Connection Test</div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">Test Connection</div>
+                    <div class="setting-description">Verify connectivity to your provider</div>
+                  </div>
+                  <button
+                    class="setting-button"
+                    onClick={handleTestCustomProviderConnection}
+                    disabled={!customProviderUrl() || customProviderTestStatus() === 'testing'}
+                  >
+                    {customProviderTestStatus() === 'testing' ? 'Testing...' : 'Test Connection'}
+                  </button>
+                </div>
+
+                <Show when={customProviderTestStatus() === 'success'}>
+                  <div class="settings-notice success">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                    <p>Connection successful!</p>
+                  </div>
+                </Show>
+
+                <Show when={customProviderTestStatus() === 'error'}>
+                  <div class="settings-notice warning">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <line x1="15" y1="9" x2="9" y2="15"></line>
+                      <line x1="9" y1="9" x2="15" y2="15"></line>
+                    </svg>
+                    <p>{customProviderTestError() || 'Connection failed'}</p>
+                  </div>
+                </Show>
+
+                <div class="settings-section-title">Quick Setup Guides</div>
+                <div class="custom-provider-guides">
+                    <div class="custom-provider-guide">
+                      <strong>MapleAI Proxy</strong>
+                      <p>URL: <code>http://localhost:8080</code></p>
+                      <p>API Key: Your Maple API key</p>
+                      <p>Models fetched dynamically from proxy</p>
+                    </div>
+                    <div class="custom-provider-guide">
+                      <strong>Ollama</strong>
+                      <p>URL: <code>http://localhost:11434</code></p>
+                      <p>API Key: Not required</p>
+                      <p>Models: Your locally pulled models</p>
+                    </div>
+                    <div class="custom-provider-guide">
+                      <strong>LM Studio</strong>
+                      <p>URL: <code>http://localhost:1234</code></p>
+                      <p>API Key: Not required</p>
+                      <p>Models: Your loaded models</p>
+                    </div>
                 </div>
               </div>
             </Show>
