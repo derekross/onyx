@@ -2422,6 +2422,64 @@ const Settings: Component<SettingsProps> = (props) => {
 
                 <div class="settings-divider" />
 
+                <div class="settings-section-title">AI Providers</div>
+
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">OpenCode</div>
+                    <div class="setting-description">Show OpenCode AI assistant in the sidebar</div>
+                  </div>
+                  <label class="setting-toggle">
+                    <input
+                      type="checkbox"
+                      checked={localStorage.getItem('opencode_enabled') !== 'false'}
+                      onChange={(e) => {
+                        localStorage.setItem('opencode_enabled', e.currentTarget.checked ? 'true' : 'false');
+                        window.dispatchEvent(new CustomEvent('ai-provider-toggle'));
+                      }}
+                    />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">OpenClaw</div>
+                    <div class="setting-description">Show OpenClaw AI assistant in the sidebar</div>
+                  </div>
+                  <label class="setting-toggle">
+                    <input
+                      type="checkbox"
+                      checked={localStorage.getItem('openclaw_enabled') !== 'false'}
+                      onChange={(e) => {
+                        localStorage.setItem('openclaw_enabled', e.currentTarget.checked ? 'true' : 'false');
+                        window.dispatchEvent(new CustomEvent('ai-provider-toggle'));
+                      }}
+                    />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">Custom Provider</div>
+                    <div class="setting-description">Show Custom AI provider in the sidebar</div>
+                  </div>
+                  <label class="setting-toggle">
+                    <input
+                      type="checkbox"
+                      checked={localStorage.getItem('custom_provider_enabled') !== 'false'}
+                      onChange={(e) => {
+                        localStorage.setItem('custom_provider_enabled', e.currentTarget.checked ? 'true' : 'false');
+                        window.dispatchEvent(new CustomEvent('ai-provider-toggle'));
+                      }}
+                    />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+
+                <div class="settings-divider" />
+
                 <div class="setting-item">
                   <div class="setting-info">
                     <div class="setting-name">Welcome Tour</div>

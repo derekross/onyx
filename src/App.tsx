@@ -107,6 +107,16 @@ const App: Component = () => {
   const [customProviderWidth, setCustomProviderWidth] = createSignal(
     parseInt(localStorage.getItem('custom_provider_width') || '500')
   );
+  // AI provider visibility toggles (persisted in localStorage)
+  const [openCodeEnabled, setOpenCodeEnabled] = createSignal(
+    localStorage.getItem('opencode_enabled') !== 'false'
+  );
+  const [openClawEnabled, setOpenClawEnabled] = createSignal(
+    localStorage.getItem('openclaw_enabled') !== 'false'
+  );
+  const [customProviderEnabled, setCustomProviderEnabled] = createSignal(
+    localStorage.getItem('custom_provider_enabled') !== 'false'
+  );
   // Editor view mode: 'live' = rendered markdown, 'source' = raw markdown
   const [editorViewMode, setEditorViewMode] = createSignal<'live' | 'source'>(
     (localStorage.getItem('editor_view_mode') as 'live' | 'source') || 'live'
@@ -1309,7 +1319,26 @@ const App: Component = () => {
     };
 
     document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
+
+    // Listen for AI provider toggle changes from Settings
+    const handleProviderToggle = () => {
+      const oc = localStorage.getItem('opencode_enabled') !== 'false';
+      const ocl = localStorage.getItem('openclaw_enabled') !== 'false';
+      const cp = localStorage.getItem('custom_provider_enabled') !== 'false';
+      setOpenCodeEnabled(oc);
+      setOpenClawEnabled(ocl);
+      setCustomProviderEnabled(cp);
+      // Close panels for disabled providers
+      if (!oc) setShowTerminal(false);
+      if (!ocl) setShowOpenClaw(false);
+      if (!cp) setShowCustomProvider(false);
+    };
+    window.addEventListener('ai-provider-toggle', handleProviderToggle);
+
+    onCleanup(() => {
+      document.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('ai-provider-toggle', handleProviderToggle);
+    });
   });
 
   const handleFileCreated = (path: string) => {
@@ -2506,8 +2535,8 @@ const App: Component = () => {
           </Show>
         </button>
         <div class="icon-bar-spacer"></div>
-        {/* OpenClaw button - Hidden on mobile */}
-        <Show when={!isMobileApp()}>
+        {/* OpenClaw button - Hidden on mobile, only shown when enabled */}
+        <Show when={!isMobileApp() && openClawEnabled()}>
           <button
             class={`icon-btn openclaw-icon ${showOpenClaw() ? 'active' : ''}`}
             onClick={() => {
@@ -2527,8 +2556,8 @@ const App: Component = () => {
             </svg>
           </button>
         </Show>
-        {/* Custom Provider button - Hidden on mobile */}
-        <Show when={!isMobileApp()}>
+        {/* Custom Provider button - Hidden on mobile, only shown when enabled */}
+        <Show when={!isMobileApp() && customProviderEnabled()}>
           <button
             class={`icon-btn custom-provider-icon ${showCustomProvider() ? 'active' : ''}`}
             onClick={() => {
@@ -2549,8 +2578,8 @@ const App: Component = () => {
             </svg>
           </button>
         </Show>
-        {/* OpenCode button - Hidden on mobile */}
-        <Show when={!isMobileApp()}>
+        {/* OpenCode button - Hidden on mobile, only shown when enabled */}
+        <Show when={!isMobileApp() && openCodeEnabled()}>
           <button
             class={`icon-btn opencode-icon ${showTerminal() ? 'active' : ''}`}
             onClick={() => setShowTerminal(!showTerminal())}
