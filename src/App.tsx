@@ -6,6 +6,7 @@ import CommandPalette from './components/CommandPalette';
 import SearchPanel from './components/SearchPanel';
 import OpenCodePanel from './components/OpenCodePanel';
 import OpenClawChat from './components/OpenClawChat';
+import CustomProviderChat from './components/CustomProviderChat';
 import Settings from './components/Settings';
 import GraphView from './components/GraphView';
 import OutlinePanel from './components/OutlinePanel';
@@ -101,6 +102,10 @@ const App: Component = () => {
   const [showOpenClaw, setShowOpenClaw] = createSignal(false);
   const [openClawWidth, setOpenClawWidth] = createSignal(
     parseInt(localStorage.getItem('openclaw_width') || '500')
+  );
+  const [showCustomProvider, setShowCustomProvider] = createSignal(false);
+  const [customProviderWidth, setCustomProviderWidth] = createSignal(
+    parseInt(localStorage.getItem('custom_provider_width') || '500')
   );
   // Editor view mode: 'live' = rendered markdown, 'source' = raw markdown
   const [editorViewMode, setEditorViewMode] = createSignal<'live' | 'source'>(
@@ -2522,6 +2527,28 @@ const App: Component = () => {
             </svg>
           </button>
         </Show>
+        {/* Custom Provider button - Hidden on mobile */}
+        <Show when={!isMobileApp()}>
+          <button
+            class={`icon-btn custom-provider-icon ${showCustomProvider() ? 'active' : ''}`}
+            onClick={() => {
+              const url = localStorage.getItem('custom_provider_url');
+              if (!url) {
+                setSettingsSection('customprovider');
+                setShowSettings(true);
+              } else {
+                setShowCustomProvider(!showCustomProvider());
+              }
+            }}
+            title="Toggle Custom Provider"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+              <path d="M2 17l10 5 10-5"></path>
+              <path d="M2 12l10 5 10-5"></path>
+            </svg>
+          </button>
+        </Show>
         {/* OpenCode button - Hidden on mobile */}
         <Show when={!isMobileApp()}>
           <button
@@ -2863,6 +2890,47 @@ const App: Component = () => {
             </div>
           </Show>
 
+          {/* Custom Provider Panel - Right Side (Desktop only) */}
+          <Show when={showCustomProvider() && !isMobileApp()}>
+            <div
+              class="resize-handle"
+              onMouseDown={(e: MouseEvent) => {
+                e.preventDefault();
+                setIsResizing('terminal');
+                const startX = e.clientX;
+                const startWidth = customProviderWidth();
+                const handleMouseMove = (e: MouseEvent) => {
+                  const delta = startX - e.clientX;
+                  const newWidth = Math.max(300, Math.min(startWidth + delta, window.innerWidth * 0.6));
+                  setCustomProviderWidth(newWidth);
+                };
+                const handleMouseUp = () => {
+                  setIsResizing(null);
+                  localStorage.setItem('custom_provider_width', customProviderWidth().toString());
+                  document.removeEventListener('mousemove', handleMouseMove);
+                  document.removeEventListener('mouseup', handleMouseUp);
+                };
+                document.addEventListener('mousemove', handleMouseMove);
+                document.addEventListener('mouseup', handleMouseUp);
+              }}
+            />
+            <div style={{ width: `${customProviderWidth()}px` }}>
+              <CustomProviderChat
+                onClose={() => setShowCustomProvider(false)}
+                onOpenSettings={() => {
+                  setSettingsSection('customprovider');
+                  setShowSettings(true);
+                }}
+                vaultPath={vaultPath()}
+                currentFile={currentTab() ? { path: currentTab()!.path, content: currentTab()!.content } : null}
+                vaultFiles={noteIndex() ? Array.from(noteIndex()!.allPaths).map(path => ({
+                  path,
+                  name: path.replace(/\\/g, '/').split('/').pop()?.replace(/\.md$/i, '') || path
+                })) : []}
+              />
+            </div>
+          </Show>
+
           {/* OpenCode Panel - Right Side (Desktop only) */}
           <Show when={showTerminal() && !isMobileApp()}>
             <div
@@ -3086,7 +3154,7 @@ const App: Component = () => {
           vaultPath={vaultPath()}
           onSyncComplete={() => refreshSidebar?.()}
           onSyncEnabledChange={(enabled) => setSyncStatus(enabled ? 'idle' : 'off')}
-          initialSection={settingsSection() as 'general' | 'editor' | 'files' | 'appearance' | 'hotkeys' | 'opencode' | 'productivity' | 'sync' | 'nostr' | 'about' | undefined}
+          initialSection={settingsSection() as 'general' | 'editor' | 'files' | 'appearance' | 'hotkeys' | 'opencode' | 'openclaw' | 'customprovider' | 'productivity' | 'sync' | 'nostr' | 'about' | undefined}
         />
       </Show>
 
