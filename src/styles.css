@@ -1120,6 +1120,34 @@ body {
   font-size: 13px;
 }
 
+.graph-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  color: var(--text-tertiary);
+}
+
+.graph-legend-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.graph-legend-low {
+  background: #55556a;
+}
+
+.graph-legend-mid {
+  background: #7b6b9e;
+}
+
+.graph-legend-high {
+  background: #a78bfa;
+  box-shadow: 0 0 4px rgba(167, 139, 250, 0.5);
+}
+
 .graph-container {
   flex: 1;
   min-height: 200px;
