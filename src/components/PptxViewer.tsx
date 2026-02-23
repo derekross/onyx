@@ -4,6 +4,7 @@ import JSZip from 'jszip';
 
 interface PptxViewerProps {
   path: string;
+  vaultPath: string | null;
 }
 
 interface ShapeElement {
@@ -184,7 +185,7 @@ const PptxViewer: Component<PptxViewerProps> = (props) => {
 
     (async () => {
       try {
-        const data = await invoke<number[]>('read_binary_file', { path: filePath });
+        const data = await invoke<number[]>('read_binary_file', { path: filePath, vaultPath: props.vaultPath });
         if (cancelled) return;
 
         const zip = await JSZip.loadAsync(new Uint8Array(data));

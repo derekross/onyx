@@ -25,7 +25,7 @@ const GraphView: Component<GraphViewProps> = (props) => {
 
   // Read file helper
   const readFile = async (path: string): Promise<string> => {
-    return await invoke<string>('read_file', { path });
+    return await invoke<string>('read_file', { path, vaultPath: props.vaultPath });
   };
 
   // Build the graph when vault/index changes

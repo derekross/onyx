@@ -88,8 +88,8 @@ export async function listTemplates(
 /**
  * Read a template's content
  */
-export async function readTemplate(templatePath: string): Promise<string> {
-  return await invoke<string>('read_file', { path: templatePath });
+export async function readTemplate(templatePath: string, vaultPath?: string): Promise<string> {
+  return await invoke<string>('read_file', { path: templatePath, vaultPath });
 }
 
 /**
@@ -103,7 +103,7 @@ export async function createNoteFromTemplate(
   variables: Record<string, string> = {}
 ): Promise<string> {
   // Read template content
-  const templateContent = await readTemplate(templatePath);
+  const templateContent = await readTemplate(templatePath, vaultPath);
   
   // Add title to variables
   variables.title = noteName;
@@ -114,15 +114,15 @@ export async function createNoteFromTemplate(
   // Ensure target folder exists
   const targetFolderPath = `${vaultPath}/${targetFolder}`;
   try {
-    await invoke('create_folder', { path: targetFolderPath });
+    await invoke('create_folder', { path: targetFolderPath, vaultPath });
   } catch {
     // Folder may already exist
   }
   
   // Create the note
   const notePath = `${targetFolderPath}/${noteName}.md`;
-  await invoke('create_file', { path: notePath });
-  await invoke('write_file', { path: notePath, content });
+  await invoke('create_file', { path: notePath, vaultPath });
+  await invoke('write_file', { path: notePath, content, vaultPath });
   
   return notePath;
 }
@@ -132,9 +132,10 @@ export async function createNoteFromTemplate(
  */
 export async function getTemplateContent(
   templatePath: string,
-  variables: Record<string, string> = {}
+  variables: Record<string, string> = {},
+  vaultPath?: string
 ): Promise<string> {
-  const templateContent = await readTemplate(templatePath);
+  const templateContent = await readTemplate(templatePath, vaultPath);
   return interpolateTemplateVariables(templateContent, variables);
 }
 
@@ -148,7 +149,7 @@ export async function ensureTemplatesFolder(
   const folderPath = `${vaultPath}/${config.folder}`;
   
   try {
-    await invoke('create_folder', { path: folderPath });
+    await invoke('create_folder', { path: folderPath, vaultPath });
   } catch {
     // Folder may already exist
   }
@@ -168,8 +169,8 @@ Created: {{date}}
 `;
     
     try {
-      await invoke('create_file', { path: samplePath });
-      await invoke('write_file', { path: samplePath, content: sampleContent });
+      await invoke('create_file', { path: samplePath, vaultPath });
+      await invoke('write_file', { path: samplePath, content: sampleContent, vaultPath });
     } catch {
       // Template may already exist
     }

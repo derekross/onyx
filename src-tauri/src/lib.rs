@@ -292,28 +292,25 @@ fn list_files(path: String) -> Result<Vec<FileEntry>, String> {
 
 #[tauri::command]
 fn read_file(path: String, vault_path: Option<String>) -> Result<String, String> {
-    // Validate path is within vault if vault_path is provided
-    if let Some(ref vault) = vault_path {
-        validate_vault_path(&path, vault)?;
-    }
+    // Always validate path is within vault
+    let vault = vault_path.ok_or("vault_path is required for read_file")?;
+    validate_vault_path(&path, &vault)?;
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn write_file(path: String, content: String, vault_path: Option<String>) -> Result<(), String> {
-    // Validate path is within vault if vault_path is provided
-    if let Some(ref vault) = vault_path {
-        validate_vault_path(&path, vault)?;
-    }
+    // Always validate path is within vault
+    let vault = vault_path.ok_or("vault_path is required for write_file")?;
+    validate_vault_path(&path, &vault)?;
     fs::write(&path, content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn write_binary_file(path: String, data: Vec<u8>, vault_path: Option<String>) -> Result<(), String> {
-    // Validate path is within vault if vault_path is provided
-    if let Some(ref vault) = vault_path {
-        validate_vault_path(&path, vault)?;
-    }
+    // Always validate path is within vault
+    let vault = vault_path.ok_or("vault_path is required for write_binary_file")?;
+    validate_vault_path(&path, &vault)?;
     // Create parent directories if needed
     if let Some(parent) = Path::new(&path).parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -323,19 +320,17 @@ fn write_binary_file(path: String, data: Vec<u8>, vault_path: Option<String>) ->
 
 #[tauri::command]
 fn read_binary_file(path: String, vault_path: Option<String>) -> Result<Vec<u8>, String> {
-    // Validate path is within vault if vault_path is provided
-    if let Some(ref vault) = vault_path {
-        validate_vault_path(&path, vault)?;
-    }
+    // Always validate path is within vault
+    let vault = vault_path.ok_or("vault_path is required for read_binary_file")?;
+    validate_vault_path(&path, &vault)?;
     fs::read(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn create_file(path: String, vault_path: Option<String>) -> Result<(), String> {
-    // Validate path is within vault if vault_path is provided
-    if let Some(ref vault) = vault_path {
-        validate_vault_path(&path, vault)?;
-    }
+    // Always validate path is within vault
+    let vault = vault_path.ok_or("vault_path is required for create_file")?;
+    validate_vault_path(&path, &vault)?;
     let path = Path::new(&path);
     if path.exists() {
         return Err("File already exists".to_string());
@@ -348,10 +343,9 @@ fn create_file(path: String, vault_path: Option<String>) -> Result<(), String> {
 
 #[tauri::command]
 fn create_folder(path: String, vault_path: Option<String>) -> Result<(), String> {
-    // Validate path is within vault if vault_path is provided
-    if let Some(ref vault) = vault_path {
-        validate_vault_path(&path, vault)?;
-    }
+    // Always validate path is within vault
+    let vault = vault_path.ok_or("vault_path is required for create_folder")?;
+    validate_vault_path(&path, &vault)?;
     fs::create_dir_all(&path).map_err(|e| e.to_string())
 }
 
@@ -373,10 +367,9 @@ fn file_exists(path: String) -> bool {
 
 #[tauri::command]
 fn delete_file(path: String, vault_path: Option<String>) -> Result<(), String> {
-    // Validate path is within vault if vault_path is provided
-    if let Some(ref vault) = vault_path {
-        validate_vault_path(&path, vault)?;
-    }
+    // Always validate path is within vault
+    let vault = vault_path.ok_or("vault_path is required for delete_file")?;
+    validate_vault_path(&path, &vault)?;
     let path = Path::new(&path);
     if path.is_dir() {
         fs::remove_dir_all(path).map_err(|e| e.to_string())
@@ -387,21 +380,19 @@ fn delete_file(path: String, vault_path: Option<String>) -> Result<(), String> {
 
 #[tauri::command]
 fn rename_file(old_path: String, new_path: String, vault_path: Option<String>) -> Result<(), String> {
-    // Validate both paths are within vault if vault_path is provided
-    if let Some(ref vault) = vault_path {
-        validate_vault_path(&old_path, vault)?;
-        validate_vault_path(&new_path, vault)?;
-    }
+    // Always validate both paths are within vault
+    let vault = vault_path.ok_or("vault_path is required for rename_file")?;
+    validate_vault_path(&old_path, &vault)?;
+    validate_vault_path(&new_path, &vault)?;
     fs::rename(&old_path, &new_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn copy_file(source: String, dest: String, vault_path: Option<String>) -> Result<(), String> {
-    // Validate both paths are within vault if vault_path is provided
-    if let Some(ref vault) = vault_path {
-        validate_vault_path(&source, vault)?;
-        validate_vault_path(&dest, vault)?;
-    }
+    // Always validate both paths are within vault
+    let vault = vault_path.ok_or("vault_path is required for copy_file")?;
+    validate_vault_path(&source, &vault)?;
+    validate_vault_path(&dest, &vault)?;
     let source_path = Path::new(&source);
     let dest_path = Path::new(&dest);
 
@@ -449,8 +440,16 @@ fn open_in_default_app(path: String) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
+        // Validate the path exists as a file or directory to prevent command injection
+        // via shell metacharacters in the path string.
+        let p = Path::new(&path);
+        if !p.exists() {
+            return Err(format!("Path does not exist: {}", path));
+        }
+        // Use canonicalize to resolve to an absolute path, preventing injection
+        let canonical = p.canonicalize().map_err(|e| format!("Invalid path: {}", e))?;
         Command::new("cmd")
-            .args(["/C", "start", "", &path])
+            .args(["/C", "start", "", &canonical.to_string_lossy()])
             .spawn()
             .map_err(|e| e.to_string())?;
     }

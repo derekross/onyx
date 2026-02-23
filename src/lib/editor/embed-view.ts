@@ -201,7 +201,7 @@ async function renderNote(
 
   try {
     // Read the note content
-    const content = await invoke<string>('read_file', { path: resolved.path });
+    const content = await invoke<string>('read_file', { path: resolved.path, vaultPath: currentVaultPath });
 
     container.innerHTML = '';
 

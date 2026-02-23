@@ -8,6 +8,7 @@ interface BacklinksPanelProps {
   currentFileName: string | null;
   graph: NoteGraph | null;
   fileContents: Map<string, string>;
+  vaultPath: string | null;
   onBacklinkClick: (path: string, line?: number) => void;
   onClose: () => void;
   onLinkMention?: (sourcePath: string, lineNumber: number, mention: string) => Promise<void>;
@@ -60,7 +61,7 @@ const BacklinksPanel: Component<BacklinksPanelProps> = (props) => {
     
     try {
       // Read the source file
-      const content = await invoke<string>('read_file', { path: backlink.sourcePath });
+      const content = await invoke<string>('read_file', { path: backlink.sourcePath, vaultPath: props.vaultPath });
       const lines = content.split('\n');
       const lineIndex = backlink.lineNumber - 1;
       
@@ -82,7 +83,7 @@ const BacklinksPanel: Component<BacklinksPanelProps> = (props) => {
           
           // Write the file back
           const newContent = lines.join('\n');
-          await invoke('write_file', { path: backlink.sourcePath, content: newContent });
+          await invoke('write_file', { path: backlink.sourcePath, content: newContent, vaultPath: props.vaultPath });
           
           // Update fileContents to reflect the change (will trigger re-render)
           if (props.onLinkMention) {

@@ -82,7 +82,7 @@ export async function openDailyNote(
   
   // Check if the note already exists
   try {
-    await invoke<string>('read_file', { path: notePath });
+    await invoke<string>('read_file', { path: notePath, vaultPath });
     return { path: notePath, isNew: false };
   } catch {
     // Note doesn't exist, create it
@@ -90,15 +90,15 @@ export async function openDailyNote(
   
   // Ensure the folder exists
   try {
-    await invoke('create_folder', { path: folderPath });
+    await invoke('create_folder', { path: folderPath, vaultPath });
   } catch {
     // Folder may already exist, that's fine
   }
   
   // Create the note with the template content
   const content = interpolateTemplate(config.template);
-  await invoke('create_file', { path: notePath });
-  await invoke('write_file', { path: notePath, content });
+  await invoke('create_file', { path: notePath, vaultPath });
+  await invoke('write_file', { path: notePath, content, vaultPath });
   
   return { path: notePath, isNew: true };
 }

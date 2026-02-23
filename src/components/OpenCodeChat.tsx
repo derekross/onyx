@@ -817,7 +817,7 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
         const fileContexts: string[] = [];
         for (const f of filesToMention) {
           try {
-            const content = await invoke<string>('read_file', { path: f.path });
+            const content = await invoke<string>('read_file', { path: f.path, vaultPath: props.vaultPath });
             const truncated = content.length > 50000 ? content.slice(0, 50000) + '\n[...truncated]' : content;
             // Include full path so OpenCode can edit the correct file
             fileContexts.push(`=== File: ${f.path} ===\n${truncated}`);

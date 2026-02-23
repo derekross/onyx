@@ -10,15 +10,17 @@
     "dialog:default",
     "shell:allow-open",
     "fs:default",
-    "fs:read-all",
-    "fs:write-all",
+    "fs:allow-read",
+    "fs:allow-write",
     {
       "identifier": "fs:scope",
       "allow": [
-        { "path": "$HOME/**" },
         { "path": "$DOCUMENT/**" },
         { "path": "$DOWNLOAD/**" },
-        { "path": "$DESKTOP/**" }
+        { "path": "$APPCONFIG/**" },
+        { "path": "$APPDATA/**" },
+        { "path": "$HOME/.config/onyx/**" },
+        { "path": "$HOME/.config/opencode/**" }
       ]
     },
     "store:default",

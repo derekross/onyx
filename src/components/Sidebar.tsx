@@ -121,7 +121,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
         // On mobile, use default vault path (folder picker not supported)
         if (platformInfo.default_vault_path) {
           // Create the directory if it doesn't exist
-          await invoke('create_folder', { path: platformInfo.default_vault_path });
+          await invoke('create_folder', { path: platformInfo.default_vault_path, vaultPath: platformInfo.default_vault_path });
           props.onVaultOpen(platformInfo.default_vault_path);
           await loadFiles(platformInfo.default_vault_path);
         } else {
@@ -263,10 +263,10 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
     try {
       if (creating.type === 'file') {
-        await invoke('create_file', { path: fullPath });
+        await invoke('create_file', { path: fullPath, vaultPath: props.vaultPath });
         props.onFileCreated(fullPath);
       } else {
-        await invoke('create_folder', { path: fullPath });
+        await invoke('create_folder', { path: fullPath, vaultPath: props.vaultPath });
       }
       await refreshFiles();
     } catch (err) {
@@ -298,7 +298,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
     const newPath = `${parentPath}/${newName}`;
 
     try {
-      await invoke('rename_file', { oldPath, newPath });
+      await invoke('rename_file', { oldPath, newPath, vaultPath: props.vaultPath });
       props.onFileMoved?.(oldPath, newPath);
       await refreshFiles();
       if (props.currentFile === oldPath) {
@@ -323,7 +323,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
     if (!item) return;
 
     try {
-      await invoke('delete_file', { path: item.path });
+      await invoke('delete_file', { path: item.path, vaultPath: props.vaultPath });
       props.onFileDeleted(item.path);
       await refreshFiles();
     } catch (err) {
@@ -341,7 +341,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
     const destPath = `${parentPath}/${copyName}`;
 
     try {
-      await invoke('copy_file', { source: path, dest: destPath });
+      await invoke('copy_file', { source: path, dest: destPath, vaultPath: props.vaultPath });
       await refreshFiles();
     } catch (err) {
       console.error('Failed to copy:', err);
@@ -400,7 +400,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
     if (!move) return;
 
     try {
-      await invoke('rename_file', { oldPath: move.sourcePath, newPath: move.destPath });
+      await invoke('rename_file', { oldPath: move.sourcePath, newPath: move.destPath, vaultPath: props.vaultPath });
       props.onFileMoved?.(move.sourcePath, move.destPath);
       await refreshFiles();
 
@@ -1051,7 +1051,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
                   const path = contextMenu()!.path;
                   closeContextMenu();
                   try {
-                    const content = await invoke<string>('read_file', { path });
+                    const content = await invoke<string>('read_file', { path, vaultPath: props.vaultPath });
                     props.onShareFile?.(path, content);
                   } catch (err) {
                     console.error('Failed to read file for sharing:', err);
@@ -1069,7 +1069,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
                   const path = contextMenu()!.path;
                   closeContextMenu();
                   try {
-                    const content = await invoke<string>('read_file', { path });
+                    const content = await invoke<string>('read_file', { path, vaultPath: props.vaultPath });
                     const fileName = path.replace(/\\/g, '/').split('/').pop() || '';
                     const title = fileName.replace(/\.md$/, '');
                     props.onPostToNostr?.(path, content, title);

@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { open } from '@tauri-apps/plugin-shell';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { readTextFile } from '@tauri-apps/plugin-fs';
 import {
   getSyncEngine,
   setOnSaveSyncCallback,
@@ -1417,7 +1418,7 @@ const Settings: Component<SettingsProps> = (props) => {
         if (entry.isDirectory && entry.children) {
           await processEntries(entry.children as typeof entries);
         } else if (entry.name.endsWith('.md')) {
-          const content = await invoke<string>('read_file', { path: entry.path });
+          const content = await invoke<string>('read_file', { path: entry.path, vaultPath: props.vaultPath });
           // Get relative path from vault
           const relativePath = entry.path.replace(basePath + '/', '');
           files.push({ path: relativePath, content });
@@ -1678,10 +1679,10 @@ const Settings: Component<SettingsProps> = (props) => {
         // Ensure parent directory exists
         const parentDir: string = fullPath.substring(0, fullPath.lastIndexOf('/'));
         if (parentDir !== props.vaultPath) {
-          await invoke('create_folder', { path: parentDir }).catch(() => {});
+          await invoke('create_folder', { path: parentDir, vaultPath: props.vaultPath }).catch(() => {});
         }
 
-        await invoke('write_file', { path: fullPath, content: remoteFile.data.content });
+        await invoke('write_file', { path: fullPath, content: remoteFile.data.content, vaultPath: props.vaultPath });
         downloadedCount++;
       }
 
@@ -1818,10 +1819,10 @@ const Settings: Component<SettingsProps> = (props) => {
       const parentDir = fullPath.substring(0, fullPath.lastIndexOf('/'));
       
       if (parentDir !== props.vaultPath) {
-        await invoke('create_folder', { path: parentDir }).catch(() => {});
+        await invoke('create_folder', { path: parentDir, vaultPath: props.vaultPath }).catch(() => {});
       }
       
-      await invoke('write_file', { path: fullPath, content: data.content });
+      await invoke('write_file', { path: fullPath, content: data.content, vaultPath: props.vaultPath });
       
       // Remove from recoverable list
       setRecoverableFiles(prev => prev.filter(f => f.path !== file.path));
@@ -2175,7 +2176,8 @@ const Settings: Component<SettingsProps> = (props) => {
 
         if (selected.endsWith('.md')) {
           // Import single SKILL.md file
-          const content = await invoke<string>('read_file', { path: selected });
+          // Use Tauri FS plugin directly since this reads from user-selected path outside vault
+          const content = await readTextFile(selected);
           const skillId = fileName.replace('.md', '').toLowerCase().replace(/[^a-z0-9-]/g, '-');
           const skillName = parseSkillName(content, skillId);
           await invoke('skill_save_file', { skillId, fileName: 'SKILL.md', content });

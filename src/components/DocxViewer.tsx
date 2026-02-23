@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 
 interface DocxViewerProps {
   path: string;
+  vaultPath: string | null;
 }
 
 const DocxViewer: Component<DocxViewerProps> = (props) => {
@@ -23,7 +24,7 @@ const DocxViewer: Component<DocxViewerProps> = (props) => {
     (async () => {
       try {
         // Read binary file from disk via Tauri
-        const data = await invoke<number[]>('read_binary_file', { path: filePath });
+        const data = await invoke<number[]>('read_binary_file', { path: filePath, vaultPath: props.vaultPath });
         if (cancelled) return;
 
         // Lazy-load mammoth

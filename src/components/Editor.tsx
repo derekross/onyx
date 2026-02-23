@@ -92,6 +92,7 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       await invoke('write_file', {
         path: props.filePath,
         content: props.content,
+        vaultPath: props.vaultPath,
       });
       console.log('File saved:', props.filePath);
     } catch (err) {
@@ -697,7 +698,7 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
               // Load content directly from disk when source view mounts.
               // This completely bypasses Milkdown's serializer.
               if (props.filePath) {
-                invoke<string>('read_file', { path: props.filePath }).then((diskContent) => {
+                invoke<string>('read_file', { path: props.filePath, vaultPath: props.vaultPath }).then((diskContent) => {
                   el.value = diskContent;
                   setSourceContent(diskContent);
                 }).catch((err) => {
@@ -724,7 +725,7 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
                 sourceAutoSaveTimeout = window.setTimeout(async () => {
                   if (props.filePath) {
                     try {
-                      await invoke('write_file', { path: props.filePath, content: value });
+                      await invoke('write_file', { path: props.filePath, content: value, vaultPath: props.vaultPath });
                     } catch (err) {
                       console.error('[SourceEditor] Failed to save:', err);
                     }
@@ -738,7 +739,7 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
                   // Immediate save on Ctrl+S
                   if (sourceAutoSaveTimeout) clearTimeout(sourceAutoSaveTimeout);
                   if (props.filePath) {
-                    invoke('write_file', { path: props.filePath, content: el.value }).catch(
+                    invoke('write_file', { path: props.filePath, content: el.value, vaultPath: props.vaultPath }).catch(
                       (err) => console.error('[SourceEditor] Failed to save:', err)
                     );
                   }

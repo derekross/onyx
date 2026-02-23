@@ -170,7 +170,7 @@ const Onboarding: Component<OnboardingProps> = (props) => {
       if (!path) throw new Error('Could not determine vault path');
       
       // Create the folder
-      await invoke('create_folder', { path });
+      await invoke('create_folder', { path, vaultPath: path });
       setVaultPath(path);
       
       // Save to settings

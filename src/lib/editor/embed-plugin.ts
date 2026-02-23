@@ -237,7 +237,7 @@ async function renderNote(container: HTMLElement, target: string, anchor: string
   container.appendChild(loading);
 
   try {
-    const content = await invoke<string>('read_file', { path: resolved.path });
+    const content = await invoke<string>('read_file', { path: resolved.path, vaultPath: currentVaultPath });
     container.innerHTML = '';
 
     let displayContent = content;

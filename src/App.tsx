@@ -386,7 +386,7 @@ const App: Component = () => {
           if ((platformInfo.platform === 'android' || platformInfo.platform === 'ios') && platformInfo.default_vault_path) {
             // Create the directory if it doesn't exist
             console.log('[App] Auto-initializing mobile vault at:', platformInfo.default_vault_path);
-            await invoke('create_folder', { path: platformInfo.default_vault_path });
+            await invoke('create_folder', { path: platformInfo.default_vault_path, vaultPath: platformInfo.default_vault_path });
             vaultToOpen = platformInfo.default_vault_path;
             // Save this as the vault path
             await invoke('save_settings', { settings: { vault_path: vaultToOpen, show_terminal: false } });
@@ -424,7 +424,7 @@ const App: Component = () => {
             const fileType = getFileType(savedTab.path);
             if (fileType === 'markdown') {
               try {
-                const content = await invoke<string>('read_file', { path: savedTab.path });
+                const content = await invoke<string>('read_file', { path: savedTab.path, vaultPath: vaultPath() });
                 restoredTabs.push({ path: savedTab.path, name: savedTab.name, content, isDirty: false, fileType });
               } catch {
                 // File may have been deleted or moved -- skip it
@@ -506,7 +506,7 @@ const App: Component = () => {
         const tabIndex = currentTabs.findIndex(tab => tab.path === modifiedPath);
         if (tabIndex !== -1 && currentTabs[tabIndex].fileType === 'markdown') {
           try {
-            const newContent = await invoke<string>('read_file', { path: modifiedPath });
+            const newContent = await invoke<string>('read_file', { path: modifiedPath, vaultPath: vaultPath() });
             const tab = currentTabs[tabIndex];
             
             // If the content is different from what we have, reload it
@@ -749,8 +749,13 @@ const App: Component = () => {
       return;
     }
     
-    // Sanitize path to prevent directory traversal
-    const safePath = path.startsWith(vault) ? path : `${vault}/${sanitizeFilePath(path)}`;
+    // Always sanitize path to prevent directory traversal.
+    // Even if path starts with vault, it could contain ../ segments to escape (e.g. /vault/../../etc/passwd).
+    // sanitizeFilePath strips traversal sequences, then we prepend the vault path.
+    const relativePath = path.startsWith(vault) 
+      ? sanitizeFilePath(path.slice(vault.length).replace(/^\//, ''))
+      : sanitizeFilePath(path);
+    const safePath = `${vault}/${relativePath}`;
     await openFile(safePath);
   };
 
@@ -1099,7 +1104,7 @@ const App: Component = () => {
 
       // Read all files and cache contents
       const readFile = async (path: string) => {
-        const content = await invoke<string>('read_file', { path });
+        const content = await invoke<string>('read_file', { path, vaultPath: vaultPath() });
         contents.set(path, content);
         return content;
       };
@@ -1167,7 +1172,7 @@ const App: Component = () => {
 
     // Load markdown file content
     try {
-      const content = await invoke<string>('read_file', { path });
+      const content = await invoke<string>('read_file', { path, vaultPath: vaultPath() });
 
       setTabs([...tabs(), { path, name, content, isDirty: false, fileType }]);
       setActiveTabIndex(tabs().length); // Will be the new last index after state updates
@@ -1239,7 +1244,7 @@ const App: Component = () => {
       // they have meaning in raw markdown, but in the WYSIWYG model they are
       // literal (links, emphasis, images are structural nodes).
       const content = tab.content.replace(/\\([[\]_!])/g, '$1');
-      await invoke('write_file', { path: tab.path, content });
+      await invoke('write_file', { path: tab.path, content, vaultPath: vaultPath() });
       setTabs(tabs().map((t, i) => i === index ? { ...t, content, isDirty: false } : t));
     } catch (err) {
       console.error('Failed to save:', err);
@@ -1357,7 +1362,7 @@ const App: Component = () => {
         console.log('[App] openVault - platform info:', info);
         if (info.default_vault_path) {
           console.log('[App] openVault - creating folder:', info.default_vault_path);
-          await invoke('create_folder', { path: info.default_vault_path });
+          await invoke('create_folder', { path: info.default_vault_path, vaultPath: info.default_vault_path });
           setVaultPath(info.default_vault_path);
           localStorage.setItem('vault_path', info.default_vault_path);
           // Refresh sidebar
@@ -1424,7 +1429,7 @@ const App: Component = () => {
     // Ensure vault directory exists
     try {
       console.log('[App] Ensuring vault folder exists:', vault);
-      await invoke('create_folder', { path: vault });
+      await invoke('create_folder', { path: vault, vaultPath: vault });
       console.log('[App] Vault folder created/verified');
     } catch (err) {
       console.error('[App] Failed to ensure vault folder exists:', err);
@@ -1449,7 +1454,7 @@ const App: Component = () => {
       console.log('[App] Creating note at:', filepath);
       
       // Create the file with some initial content
-      await invoke('create_file', { path: filepath });
+      await invoke('create_file', { path: filepath, vaultPath: vault });
       
       console.log('[App] Note created successfully');
       
@@ -1726,7 +1731,7 @@ const App: Component = () => {
     } else if (resolved.path) {
       // Create new note (no anchor navigation for new notes)
       try {
-        await invoke('create_file', { path: resolved.path });
+        await invoke('create_file', { path: resolved.path, vaultPath: vaultPath() });
         await openFile(resolved.path);
         refreshSidebar?.();
       } catch (err) {
@@ -1786,7 +1791,7 @@ const App: Component = () => {
           if (entry.isDirectory && entry.children) {
             await processEntries(entry.children as typeof entries);
           } else if (entry.name.endsWith('.md')) {
-            const content = await invoke<string>('read_file', { path: entry.path });
+            const content = await invoke<string>('read_file', { path: entry.path, vaultPath: vaultPath() });
             const relativePath = entry.path.replace(vaultPath()! + '/', '');
             localFiles.push({ path: relativePath, fullPath: entry.path, content });
           }
@@ -1827,7 +1832,7 @@ const App: Component = () => {
               if (remoteModifiedTime > localModifiedTime) {
                 // Remote is newer - download
                 console.log(`[Sync] Downloading newer remote version: ${localFile.path}`);
-                await invoke('write_file', { path: localFile.fullPath, content: remoteFile.data.content });
+                await invoke('write_file', { path: localFile.fullPath, content: remoteFile.data.content, vaultPath: vaultPath() });
                 downloadedCount++;
               } else {
                 // Local is newer or same time - upload
@@ -2031,9 +2036,9 @@ const App: Component = () => {
         const fullPath = `${vaultPath()}/${path}`;
         const parentDir = fullPath.substring(0, fullPath.lastIndexOf('/'));
         if (parentDir !== vaultPath()) {
-          await invoke('create_folder', { path: parentDir }).catch(() => {});
+          await invoke('create_folder', { path: parentDir, vaultPath: vaultPath() }).catch(() => {});
         }
-        await invoke('write_file', { path: fullPath, content: remoteFile.data.content });
+        await invoke('write_file', { path: fullPath, content: remoteFile.data.content, vaultPath: vaultPath() });
         downloadedCount++;
       }
       
@@ -2059,7 +2064,7 @@ const App: Component = () => {
           const tab = currentTabs[i];
           if (tab.fileType !== 'markdown') continue;
           try {
-            const newContent = await invoke<string>('read_file', { path: tab.path });
+            const newContent = await invoke<string>('read_file', { path: tab.path, vaultPath: vaultPath() });
             if (newContent !== tab.content) {
               setTabs(prev => prev.map((t, idx) => 
                 idx === i ? { ...t, content: newContent, isDirty: false } : t
@@ -2098,7 +2103,7 @@ const App: Component = () => {
       console.log('[DailyNotes] Opened daily note:', path, isNew ? '(new)' : '(existing)');
       
       // Open the file in a tab
-      const content = await invoke<string>('read_file', { path });
+      const content = await invoke<string>('read_file', { path, vaultPath: vaultPath() });
       const name = path.split('/').pop() || 'Daily Note';
       
       // Check if tab already exists
@@ -2156,7 +2161,7 @@ const App: Component = () => {
       );
       
       // Open the new note
-      const content = await invoke<string>('read_file', { path: notePath });
+      const content = await invoke<string>('read_file', { path: notePath, vaultPath: vaultPath() });
       const name = notePath.split('/').pop() || noteName;
       
       setTabs([...tabs(), { path: notePath, name, content, isDirty: false, fileType: 'markdown' }]);
@@ -2175,7 +2180,7 @@ const App: Component = () => {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleInsertTemplate = async (template: TemplateInfo) => {
     try {
-      const content = await getTemplateContent(template.path);
+      const content = await getTemplateContent(template.path, {}, vaultPath() || undefined);
       // TODO: Insert at cursor position in editor
       console.log('[Templates] Template content to insert:', content.substring(0, 100));
       setShowTemplatesModal(false);
@@ -2766,13 +2771,13 @@ const App: Component = () => {
                   </div>
                 </Show>
                 <Show when={currentTab()?.fileType === 'docx'}>
-                  <DocxViewer path={currentTab()!.path} />
+                  <DocxViewer path={currentTab()!.path} vaultPath={vaultPath()} />
                 </Show>
                 <Show when={currentTab()?.fileType === 'xlsx'}>
-                  <XlsxViewer path={currentTab()!.path} />
+                  <XlsxViewer path={currentTab()!.path} vaultPath={vaultPath()} />
                 </Show>
                 <Show when={currentTab()?.fileType === 'pptx'}>
-                  <PptxViewer path={currentTab()!.path} />
+                  <PptxViewer path={currentTab()!.path} vaultPath={vaultPath()} />
                 </Show>
               </div>
             </Show>
@@ -2809,12 +2814,13 @@ const App: Component = () => {
                 currentFileName={currentTab()?.name || null}
                 graph={noteGraph()}
                 fileContents={fileContents()}
+                vaultPath={vaultPath()}
                 onBacklinkClick={(path, line) => openFile(path, line)}
                 onClose={() => setShowBacklinks(false)}
                 onLinkMention={async (sourcePath) => {
                   // Refresh the file contents for the modified file
                   try {
-                    const newContent = await invoke<string>('read_file', { path: sourcePath });
+                    const newContent = await invoke<string>('read_file', { path: sourcePath, vaultPath: vaultPath() });
                     const newContents = new Map(fileContents());
                     newContents.set(sourcePath, newContent);
                     setFileContents(newContents);
@@ -2824,7 +2830,7 @@ const App: Component = () => {
                     const vault = vaultPath();
                     if (index && vault) {
                       const graph = await buildNoteGraph(vault, index, async (path: string) => {
-                        return newContents.get(path) || await invoke<string>('read_file', { path });
+                        return newContents.get(path) || await invoke<string>('read_file', { path, vaultPath: vaultPath() });
                       });
                       setNoteGraph(graph);
                     }
@@ -3047,7 +3053,7 @@ const App: Component = () => {
                     const tab = tabs()[idx];
                     if (tab?.path) {
                       try {
-                        const diskContent = await invoke<string>('read_file', { path: tab.path });
+                        const diskContent = await invoke<string>('read_file', { path: tab.path, vaultPath: vaultPath() });
                         setTabs(tabs().map((t, i) => i === idx ? { ...t, content: diskContent, isDirty: false } : t));
                       } catch (err) {
                         console.error('Failed to reload content on mode switch:', err);
@@ -3338,7 +3344,7 @@ const App: Component = () => {
             
             // Read the file content
             const filePath = showFileInfo()!;
-            const content = await invoke<string>('read_file', { path: filePath });
+            const content = await invoke<string>('read_file', { path: filePath, vaultPath: vaultPath() });
             const relativePath = filePath.replace(vaultPath()! + '/', '');
             
             // Publish the file
