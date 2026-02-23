@@ -622,45 +622,21 @@ fn list_assets(path: String) -> Result<Vec<AssetEntry>, String> {
     Ok(assets)
 }
 
-#[tauri::command]
-fn run_terminal_command(command: String, cwd: Option<String>) -> Result<String, String> {
-    let mut cmd = if cfg!(target_os = "windows") {
-        let mut c = Command::new("cmd");
-        c.args(["/C", &command]);
-        c
-    } else {
-        let mut c = Command::new("sh");
-        c.args(["-c", &command]);
-        c
-    };
-
-    if let Some(dir) = cwd {
-        cmd.current_dir(dir);
-    }
-
-    let output = cmd.output().map_err(|e| e.to_string())?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    if !output.status.success() {
-        return Err(format!("{}{}", stdout, stderr));
-    }
-
-    Ok(format!("{}{}", stdout, stderr))
-}
-
 /// Start the OpenCode server in the background
 /// This spawns `opencode serve --port <port>` and tracks the process for cleanup
 /// Works on Windows, macOS, and Linux
 #[tauri::command]
 fn start_opencode_server(
+    app: AppHandle,
     state: tauri::State<'_, SharedOpenCodeServerState>,
     command: String,
     cwd: Option<String>,
     port: u16,
 ) -> Result<(), String> {
     use std::process::Stdio;
+
+    // Validate the command is a known OpenCode binary
+    let validated_command = validate_opencode_command(&command, &app)?;
 
     // Check if we already have a running server
     {
@@ -719,7 +695,7 @@ fn start_opencode_server(
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-        let mut cmd = Command::new(&command);
+        let mut cmd = Command::new(&validated_command);
         cmd.args(["serve", "--port", &port.to_string()]);
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
@@ -734,7 +710,7 @@ fn start_opencode_server(
 
     #[cfg(target_os = "macos")]
     let child = {
-        let mut cmd = Command::new(&command);
+        let mut cmd = Command::new(&validated_command);
         cmd.args(["serve", "--port", &port.to_string()]);
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
@@ -749,7 +725,7 @@ fn start_opencode_server(
 
     #[cfg(target_os = "linux")]
     let child = {
-        let mut cmd = Command::new(&command);
+        let mut cmd = Command::new(&validated_command);
         cmd.args(["serve", "--port", &port.to_string()]);
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
@@ -816,6 +792,173 @@ fn is_opencode_server_managed(state: tauri::State<'_, SharedOpenCodeServerState>
     } else {
         false
     }
+}
+
+/// Validate that an OpenCode command path is safe to execute.
+/// Allows:
+///   - The bare command "opencode" (resolved via PATH)
+///   - Absolute paths that resolve to known install locations
+///   - Paths explicitly registered by the user via the register_opencode_path command
+fn validate_opencode_command(command: &str, app: &AppHandle) -> Result<String, String> {
+    let trimmed = command.trim();
+
+    // Allow the bare command name -- resolved via PATH which we control
+    if trimmed == "opencode" || trimmed == "opencode.exe" {
+        return Ok(trimmed.to_string());
+    }
+
+    let cmd_path = Path::new(trimmed);
+
+    // Must be an absolute path
+    if !cmd_path.is_absolute() {
+        return Err(format!(
+            "OpenCode path must be 'opencode' or an absolute path, got: {}",
+            trimmed
+        ));
+    }
+
+    // Must exist
+    if !cmd_path.exists() {
+        return Err(format!("OpenCode binary not found at: {}", trimmed));
+    }
+
+    // Canonicalize to resolve symlinks
+    let canonical = cmd_path
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve path {}: {}", trimmed, e))?;
+    let canonical_str = canonical.to_string_lossy().to_string();
+
+    // Check against known install locations
+    let known_paths = get_known_opencode_paths();
+    for known in &known_paths {
+        if let Ok(known_canonical) = known.canonicalize() {
+            if canonical == known_canonical {
+                return Ok(canonical_str);
+            }
+        }
+        // Also compare non-canonical in case the file was just installed
+        if canonical == *known {
+            return Ok(canonical_str);
+        }
+    }
+
+    // Check against explicitly registered path (stored in Tauri Store, not localStorage)
+    if let Some(registered) = get_registered_path(app) {
+        if let Ok(reg_canonical) = Path::new(&registered).canonicalize() {
+            if canonical == reg_canonical {
+                return Ok(canonical_str);
+            }
+        }
+    }
+
+    Err(format!(
+        "OpenCode path '{}' is not in a known install location. \
+         Use Settings to register a custom path.",
+        trimmed
+    ))
+}
+
+/// Get all known OpenCode binary paths for the current platform
+fn get_known_opencode_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(appdata) = dirs::data_dir() {
+            paths.push(appdata.join("opencode").join("bin").join("opencode.exe"));
+        }
+        paths.push(PathBuf::from("C:\\Program Files\\opencode\\opencode.exe"));
+        paths.push(PathBuf::from("C:\\opencode\\opencode.exe"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            paths.push(PathBuf::from(&home).join(".opencode/bin/opencode"));
+            paths.push(PathBuf::from(&home).join(".local/bin/opencode"));
+            paths.push(PathBuf::from(&home).join("bin/opencode"));
+            paths.push(PathBuf::from(&home).join(".cargo/bin/opencode"));
+        }
+        paths.push(PathBuf::from("/usr/local/bin/opencode"));
+        paths.push(PathBuf::from("/usr/bin/opencode"));
+    }
+
+    paths
+}
+
+/// Read the user-registered OpenCode path from the Tauri Store
+fn get_registered_path(app: &AppHandle) -> Option<String> {
+    use tauri_plugin_store::StoreExt;
+    if let Ok(store) = app.store("security.json") {
+        if let Some(val) = store.get("opencode_registered_path") {
+            return val.as_str().map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+/// Register a custom OpenCode binary path after validating it.
+/// The path is stored in the Tauri Store (backend-managed, not localStorage).
+#[tauri::command]
+fn register_opencode_path(app: AppHandle, path: String) -> Result<String, String> {
+    use tauri_plugin_store::StoreExt;
+
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        // Clear registration
+        if let Ok(store) = app.store("security.json") {
+            store.delete("opencode_registered_path");
+            let _ = store.save();
+        }
+        return Ok(String::new());
+    }
+
+    let cmd_path = Path::new(trimmed);
+
+    // Must be absolute
+    if !cmd_path.is_absolute() {
+        return Err("Path must be absolute".to_string());
+    }
+
+    // Must exist
+    if !cmd_path.exists() {
+        return Err(format!("File not found: {}", trimmed));
+    }
+
+    // Canonicalize
+    let canonical = cmd_path
+        .canonicalize()
+        .map_err(|e| format!("Invalid path: {}", e))?;
+
+    // On Unix, verify it's executable
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let metadata = fs::metadata(&canonical).map_err(|e| format!("Cannot read file: {}", e))?;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err("File is not executable".to_string());
+        }
+    }
+
+    let canonical_str = canonical.to_string_lossy().to_string();
+
+    // Store in Tauri Store
+    let store = app
+        .store("security.json")
+        .map_err(|e| format!("Failed to open store: {}", e))?;
+    store.set(
+        "opencode_registered_path",
+        serde_json::Value::String(canonical_str.clone()),
+    );
+    let _ = store.save();
+
+    Ok(canonical_str)
+}
+
+/// Get the currently registered OpenCode path (if any)
+#[tauri::command]
+fn get_registered_opencode_path(app: AppHandle) -> Option<String> {
+    get_registered_path(&app)
 }
 
 // OpenCode Installer Module
@@ -1308,6 +1451,9 @@ mod pty {
         cols: u16,
         rows: u16,
     ) -> Result<String, String> {
+        // Security: Validate the command is a known OpenCode binary
+        let validated_command = validate_opencode_command(&command, &app)?;
+
         // Security: Clean up expired sessions and check limits
         {
             let mut state_guard = state.lock();
@@ -1328,7 +1474,7 @@ mod pty {
             })
             .map_err(|e| e.to_string())?;
 
-        let mut cmd = CommandBuilder::new(&command);
+        let mut cmd = CommandBuilder::new(&validated_command);
 
         if let Some(dir) = cwd {
             cmd.cwd(dir);
@@ -2429,7 +2575,8 @@ pub fn run() {
             }
         })
         // Register asset protocol to serve local files
-        .register_uri_scheme_protocol("asset", |_app, request| {
+        .register_uri_scheme_protocol("asset", |ctx, request| {
+            let app = ctx.app_handle();
             let path = request.uri().path();
             // URL decode the path
             let decoded_path = percent_decode_str(path).decode_utf8_lossy().to_string();
@@ -2471,6 +2618,38 @@ pub fn run() {
                     .status(403)
                     .header("Content-Type", "text/plain")
                     .body("Access denied: not a file".as_bytes().to_vec())
+                    .unwrap();
+            }
+
+            // Security: Restrict access to files within the vault directory or config directory
+            let allowed = {
+                let mut is_allowed = false;
+                // Check vault path from settings
+                let settings_path = get_settings_path(&app);
+                if let Ok(content) = fs::read_to_string(&settings_path) {
+                    if let Ok(settings) = serde_json::from_str::<AppSettings>(&content) {
+                        if let Some(ref vault) = settings.vault_path {
+                            if let Ok(vault_canonical) = Path::new(vault).canonicalize() {
+                                is_allowed = canonical.starts_with(&vault_canonical);
+                            }
+                        }
+                    }
+                }
+                // Also allow config directory access (for app assets)
+                let config_dir = get_config_dir_with_app(&app);
+                if let Ok(config_canonical) = config_dir.canonicalize() {
+                    if canonical.starts_with(&config_canonical) {
+                        is_allowed = true;
+                    }
+                }
+                is_allowed
+            };
+
+            if !allowed {
+                return tauri::http::Response::builder()
+                    .status(403)
+                    .header("Content-Type", "text/plain")
+                    .body("Access denied: file outside vault".as_bytes().to_vec())
                     .unwrap();
             }
 
@@ -2545,10 +2724,11 @@ pub fn run() {
             show_in_folder,
             search_files,
             get_file_stats,
-            run_terminal_command,
             start_opencode_server,
             stop_opencode_server,
             is_opencode_server_managed,
+            register_opencode_path,
+            get_registered_opencode_path,
             pty::spawn_pty,
             pty::write_pty,
             pty::resize_pty,

@@ -221,6 +221,8 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
             if (detectedPath) {
               opencodePath = detectedPath;
               localStorage.setItem('opencode_path', detectedPath);
+              // Register on backend so it passes validation
+              await invoke('register_opencode_path', { path: detectedPath }).catch(() => {});
               console.log('[OpenCodeChat] Auto-detected OpenCode at:', detectedPath);
             }
           } catch (err) {
@@ -1048,8 +1050,9 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
     try {
       const installedPath = await invoke<string>('install_opencode');
       
-      // Save the path to localStorage
+      // Save the path to localStorage and register on backend
       localStorage.setItem('opencode_path', installedPath);
+      await invoke('register_opencode_path', { path: installedPath }).catch(() => {});
       
       // Clean up listener
       unlisten();

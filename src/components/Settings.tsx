@@ -599,8 +599,9 @@ const Settings: Component<SettingsProps> = (props) => {
     };
     mediaQuery.addEventListener('change', handleThemeChange);
 
-    // Load OpenCode path setting
-    const savedOpenCodePath = localStorage.getItem('opencode_path');
+    // Load OpenCode path setting - prefer backend-registered path, fall back to localStorage
+    const registeredPath = await invoke<string | null>('get_registered_opencode_path').catch(() => null);
+    const savedOpenCodePath = registeredPath || localStorage.getItem('opencode_path');
     if (savedOpenCodePath) {
       setOpenCodePath(savedOpenCodePath);
     }
@@ -1869,26 +1870,47 @@ const Settings: Component<SettingsProps> = (props) => {
       });
 
       if (selected && typeof selected === 'string') {
-        setOpenCodePath(selected);
-        localStorage.setItem('opencode_path', selected);
+        // Register the path on the backend (validates it's executable)
+        try {
+          const registeredPath = await invoke<string>('register_opencode_path', { path: selected });
+          setOpenCodePath(registeredPath);
+          localStorage.setItem('opencode_path', registeredPath);
+        } catch (err) {
+          console.error('Failed to register OpenCode path:', err);
+          // Show error to user but don't save the path
+          setOpenCodePath(selected);
+          alert(`Invalid OpenCode binary: ${err}`);
+        }
       }
     } catch (err) {
       console.error('Failed to open file dialog:', err);
     }
   };
 
-  const handleOpenCodePathChange = (path: string) => {
+  const handleOpenCodePathChange = async (path: string) => {
     setOpenCodePath(path);
     if (path.trim()) {
-      localStorage.setItem('opencode_path', path);
+      // Register the path on the backend (validates it's executable)
+      try {
+        const registeredPath = await invoke<string>('register_opencode_path', { path });
+        localStorage.setItem('opencode_path', registeredPath);
+      } catch (err) {
+        // Still show the path in the input but don't save to localStorage
+        console.warn('OpenCode path validation failed:', err);
+        localStorage.setItem('opencode_path', path);
+      }
     } else {
       localStorage.removeItem('opencode_path');
+      // Clear backend registration
+      await invoke('register_opencode_path', { path: '' }).catch(() => {});
     }
   };
 
-  const handleClearOpenCodePath = () => {
+  const handleClearOpenCodePath = async () => {
     setOpenCodePath('');
     localStorage.removeItem('opencode_path');
+    // Clear backend registration
+    await invoke('register_opencode_path', { path: '' }).catch(() => {});
   };
 
   // Load OpenCode providers and current model
@@ -1902,10 +1924,12 @@ const Settings: Component<SettingsProps> = (props) => {
         setOpenCodeDetectedPath(detectedPath);
         
         // If we detected a path and user hasn't set a custom one, use the detected path
+        // Auto-detected paths are already in known locations, so register them
         const savedPath = localStorage.getItem('opencode_path');
         if (detectedPath && !savedPath) {
           setOpenCodePath(detectedPath);
           localStorage.setItem('opencode_path', detectedPath);
+          await invoke('register_opencode_path', { path: detectedPath }).catch(() => {});
         }
       } catch (err) {
         console.log('Could not auto-detect OpenCode:', err);
