@@ -197,6 +197,38 @@ function insertEmbed(view: EditorView, relativePath: string): boolean {
 }
 
 /**
+ * Handle an array of File objects (from clipboardData.items or filtered files)
+ */
+async function handleFileArray(files: File[], view: EditorView): Promise<boolean> {
+  console.log('[Upload] handleFileArray called with', files.length, 'files');
+  console.log('[Upload] currentVaultPath:', currentVaultPath);
+
+  if (!currentVaultPath || files.length === 0) return false;
+
+  let handled = false;
+
+  for (const file of files) {
+    console.log('[Upload] Processing file:', file.name, 'type:', file.type, 'size:', file.size);
+    if (!isSupportedFileType(file.type)) continue;
+
+    try {
+      const relativePath = await saveFileToVault(file, currentVaultPath);
+      insertEmbed(view, relativePath);
+      handled = true;
+    } catch (err) {
+      console.error('[Upload] Failed to save file:', err);
+    }
+  }
+
+  if (handled) {
+    console.log('[Upload] Files uploaded, triggering callback');
+    onFilesUploaded?.();
+  }
+
+  return handled;
+}
+
+/**
  * Handle files from paste
  */
 async function handleFiles(files: FileList, view: EditorView): Promise<boolean> {
@@ -295,35 +327,52 @@ export const vaultUploadPlugin = $prose(() => {
         }
 
         // First, check for files (images from clipboard)
+        // On Windows, clipboardData.files may be empty or contain 0-byte entries
+        // for screenshot pastes. We also check clipboardData.items as a fallback.
         const files = clipboardData.files;
         console.log('[Upload] Clipboard files:', files?.length || 0);
 
+        let filesToHandle: File[] = [];
+
+        // Try clipboardData.files first
         if (files && files.length > 0) {
-          // Check if any file is a supported type
-          let hasSupported = false;
           for (let i = 0; i < files.length; i++) {
             const file = files.item(i);
-            console.log('[Upload] File', i, ':', file?.name, 'type:', file?.type);
-            if (file && isSupportedFileType(file.type)) {
-              hasSupported = true;
+            if (file && file.size > 0 && isSupportedFileType(file.type)) {
+              filesToHandle.push(file);
             }
           }
+        }
 
-          if (hasSupported) {
-            console.log('[Upload] Found supported files, handling...');
-            event.preventDefault();
-
-            // Handle async properly - don't insert embed until file is saved
-            (async () => {
-              try {
-                await handleFiles(files, view);
-              } catch (err) {
-                console.error('[Upload] Error in handleFiles:', err);
+        // Fallback: check clipboardData.items (more reliable on Windows for screenshots)
+        if (filesToHandle.length === 0 && clipboardData.items) {
+          for (let i = 0; i < clipboardData.items.length; i++) {
+            const item = clipboardData.items[i];
+            console.log('[Upload] Item', i, ':', item.kind, item.type);
+            if (item.kind === 'file' && isSupportedFileType(item.type)) {
+              const file = item.getAsFile();
+              if (file && file.size > 0) {
+                filesToHandle.push(file);
               }
-            })();
-
-            return true;
+            }
           }
+        }
+
+        if (filesToHandle.length > 0) {
+          console.log('[Upload] Found', filesToHandle.length, 'supported files, handling...');
+          event.preventDefault();
+
+          // Handle async properly - don't insert embed until file is saved
+          const fileList = filesToHandle;
+          (async () => {
+            try {
+              await handleFileArray(fileList, view);
+            } catch (err) {
+              console.error('[Upload] Error in handleFiles:', err);
+            }
+          })();
+
+          return true;
         }
 
         // Check for text that might be a file path

@@ -3,6 +3,24 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { isMobile } from '../lib/platform';
 
+/**
+ * Get the parent directory of a path, handling both / and \ separators (Windows compatibility).
+ */
+function getParentPath(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/');
+  const lastSlash = normalized.lastIndexOf('/');
+  if (lastSlash <= 0) return normalized.substring(0, lastSlash + 1) || '/';
+  // Return using original characters up to the last separator position
+  return filePath.substring(0, lastSlash);
+}
+
+/**
+ * Get the file/folder name from a path, handling both / and \ separators.
+ */
+function getFileName(filePath: string): string {
+  return filePath.replace(/\\/g, '/').split('/').pop() || '';
+}
+
 interface FileEntry {
   name: string;
   path: string;
@@ -259,7 +277,8 @@ const Sidebar: Component<SidebarProps> = (props) => {
     const creating = isCreating();
     if (!creating || !newItemName()) return;
 
-    const fullPath = `${creating.parentPath}/${newItemName()}${creating.type === 'file' && !newItemName().endsWith('.md') ? '.md' : ''}`;
+    const createSep = creating.parentPath.includes('\\') ? '\\' : '/';
+    const fullPath = `${creating.parentPath}${createSep}${newItemName()}${creating.type === 'file' && !newItemName().endsWith('.md') ? '.md' : ''}`;
 
     try {
       if (creating.type === 'file') {
@@ -287,7 +306,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
   const confirmRename = async (oldPath: string) => {
     if (!renameValue()) return;
 
-    const parentPath = oldPath.substring(0, oldPath.lastIndexOf('/'));
+    const parentPath = getParentPath(oldPath);
     let newName = renameValue();
 
     // If original file was .md and user didn't include extension, add it back
@@ -295,7 +314,9 @@ const Sidebar: Component<SidebarProps> = (props) => {
       newName = `${newName}.md`;
     }
 
-    const newPath = `${parentPath}/${newName}`;
+    // Use the same path separator as the original path for Windows compatibility
+    const sep = oldPath.includes('\\') ? '\\' : '/';
+    const newPath = `${parentPath}${sep}${newName}`;
 
     try {
       await invoke('rename_file', { oldPath, newPath, vaultPath: props.vaultPath });
@@ -334,11 +355,12 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
   const handleMakeCopy = async (path: string) => {
     const fileName = path.replace(/\\/g, '/').split('/').pop() || '';
-    const parentPath = path.substring(0, path.lastIndexOf('/'));
+    const parentPath = getParentPath(path);
     const ext = fileName.includes('.') ? fileName.substring(fileName.lastIndexOf('.')) : '';
     const baseName = ext ? fileName.substring(0, fileName.lastIndexOf('.')) : fileName;
     const copyName = `${baseName} copy${ext}`;
-    const destPath = `${parentPath}/${copyName}`;
+    const copySep = path.includes('\\') ? '\\' : '/';
+    const destPath = `${parentPath}${copySep}${copyName}`;
 
     try {
       await invoke('copy_file', { source: path, dest: destPath, vaultPath: props.vaultPath });
@@ -436,10 +458,12 @@ const Sidebar: Component<SidebarProps> = (props) => {
     if (!isDir) return;
 
     // Can't drop on itself or its children
-    if (targetPath === dragged || targetPath.startsWith(dragged + '/')) return;
+    const draggedNorm = dragged.replace(/\\/g, '/');
+    const targetNorm = targetPath.replace(/\\/g, '/');
+    if (targetNorm === draggedNorm || targetNorm.startsWith(draggedNorm + '/')) return;
 
     // Can't drop on its current parent
-    const draggedParent = dragged.substring(0, dragged.lastIndexOf('/'));
+    const draggedParent = getParentPath(dragged);
     if (targetPath === draggedParent) return;
 
     if (e.dataTransfer) {
@@ -462,8 +486,9 @@ const Sidebar: Component<SidebarProps> = (props) => {
     const sourcePath = draggedItem();
     if (!sourcePath) return;
 
-    const fileName = sourcePath.replace(/\\/g, '/').split('/').pop() || '';
-    const newPath = `${targetPath}/${fileName}`;
+    const fileName = getFileName(sourcePath);
+    const dropSep = targetPath.includes('\\') ? '\\' : '/';
+    const newPath = `${targetPath}${dropSep}${fileName}`;
 
     // Don't move to same location
     if (sourcePath === newPath) {
@@ -486,11 +511,12 @@ const Sidebar: Component<SidebarProps> = (props) => {
     const sourcePath = draggedItem();
     if (!sourcePath) return;
 
-    const fileName = sourcePath.replace(/\\/g, '/').split('/').pop() || '';
-    const newPath = `${props.vaultPath}/${fileName}`;
+    const fileName = getFileName(sourcePath);
+    const rootSep = props.vaultPath.includes('\\') ? '\\' : '/';
+    const newPath = `${props.vaultPath}${rootSep}${fileName}`;
 
     // Don't move if already in root
-    const sourceParent = sourcePath.substring(0, sourcePath.lastIndexOf('/'));
+    const sourceParent = getParentPath(sourcePath);
     if (sourceParent === props.vaultPath) {
       setDraggedItem(null);
       setDropTarget(null);
@@ -774,7 +800,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
             e.preventDefault();
             const dragged = draggedItem();
             if (!dragged || !props.vaultPath) return;
-            const draggedParent = dragged.substring(0, dragged.lastIndexOf('/'));
+            const draggedParent = getParentPath(dragged);
             if (draggedParent === props.vaultPath) return;
             if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
             setDropTarget(props.vaultPath);
