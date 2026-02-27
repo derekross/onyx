@@ -437,20 +437,29 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
   // Drag and drop handlers
   const handleDragStart = (e: DragEvent, path: string) => {
+    console.log('[DnD] dragStart:', path);
     setDraggedItem(path);
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', path);
+      console.log('[DnD] effectAllowed set to move, data set');
     }
   };
 
   const handleDragEnd = () => {
+    console.log('[DnD] dragEnd');
     setDraggedItem(null);
     setDropTarget(null);
   };
 
+  let dragOverLogged = false;
   const handleDragOver = (e: DragEvent, targetPath: string, isDir: boolean) => {
     e.preventDefault();
+    if (!dragOverLogged) {
+      console.log('[DnD] dragOver fired — target:', targetPath, 'isDir:', isDir, 'types:', e.dataTransfer?.types);
+      dragOverLogged = true;
+      setTimeout(() => { dragOverLogged = false; }, 500);
+    }
     const dragged = draggedItem();
     if (!dragged) {
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
@@ -495,12 +504,15 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
   const handleDrop = (e: DragEvent, targetPath: string) => {
     e.preventDefault();
+    console.log('[DnD] drop on:', targetPath);
     const sourcePath = draggedItem();
+    console.log('[DnD] sourcePath from signal:', sourcePath);
     if (!sourcePath) return;
 
     const fileName = getFileName(sourcePath);
     const dropSep = targetPath.includes('\\') ? '\\' : '/';
     const newPath = `${targetPath}${dropSep}${fileName}`;
+    console.log('[DnD] moving:', sourcePath, '->', newPath);
 
     // Don't move to same location
     if (sourcePath === newPath) {
@@ -518,14 +530,17 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
   const handleDropOnRoot = (e: DragEvent) => {
     e.preventDefault();
+    console.log('[DnD] dropOnRoot');
     if (!props.vaultPath) return;
 
     const sourcePath = draggedItem();
+    console.log('[DnD] sourcePath from signal:', sourcePath);
     if (!sourcePath) return;
 
     const fileName = getFileName(sourcePath);
     const rootSep = props.vaultPath.includes('\\') ? '\\' : '/';
     const newPath = `${props.vaultPath}${rootSep}${fileName}`;
+    console.log('[DnD] moving to root:', sourcePath, '->', newPath);
 
     // Don't move if already in root
     const sourceParent = getParentPath(sourcePath);
