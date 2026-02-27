@@ -435,6 +435,16 @@ const Sidebar: Component<SidebarProps> = (props) => {
     setMoveConfirm(null);
   };
 
+  // Global debug listener to check if drop events fire at all
+  if (typeof document !== 'undefined') {
+    document.addEventListener('drop', (e) => {
+      console.log('[DnD] GLOBAL drop event fired, target:', (e.target as HTMLElement)?.className);
+    }, true);
+    document.addEventListener('dragover', (_e) => {
+      // Don't log every dragover, just track that it fires
+    }, true);
+  }
+
   // Drag and drop handlers
   const handleDragStart = (e: DragEvent, path: string) => {
     console.log('[DnD] dragStart:', path);
