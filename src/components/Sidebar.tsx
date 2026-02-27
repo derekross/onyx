@@ -450,21 +450,31 @@ const Sidebar: Component<SidebarProps> = (props) => {
   };
 
   const handleDragOver = (e: DragEvent, targetPath: string, isDir: boolean) => {
+    // Must always preventDefault to avoid forbidden cursor on Windows WebView2
     e.preventDefault();
     const dragged = draggedItem();
     if (!dragged) return;
 
     // Can only drop on directories
-    if (!isDir) return;
+    if (!isDir) {
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+      return;
+    }
 
     // Can't drop on itself or its children
     const draggedNorm = dragged.replace(/\\/g, '/');
     const targetNorm = targetPath.replace(/\\/g, '/');
-    if (targetNorm === draggedNorm || targetNorm.startsWith(draggedNorm + '/')) return;
+    if (targetNorm === draggedNorm || targetNorm.startsWith(draggedNorm + '/')) {
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+      return;
+    }
 
     // Can't drop on its current parent
     const draggedParent = getParentPath(dragged);
-    if (targetPath === draggedParent) return;
+    if (targetPath === draggedParent) {
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+      return;
+    }
 
     if (e.dataTransfer) {
       e.dataTransfer.dropEffect = 'move';
@@ -799,9 +809,15 @@ const Sidebar: Component<SidebarProps> = (props) => {
             if (isMobile()) return;
             e.preventDefault();
             const dragged = draggedItem();
-            if (!dragged || !props.vaultPath) return;
+            if (!dragged || !props.vaultPath) {
+              if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+              return;
+            }
             const draggedParent = getParentPath(dragged);
-            if (draggedParent === props.vaultPath) return;
+            if (draggedParent === props.vaultPath) {
+              if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+              return;
+            }
             if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
             setDropTarget(props.vaultPath);
           }}
