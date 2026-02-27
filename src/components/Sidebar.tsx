@@ -436,7 +436,13 @@ const Sidebar: Component<SidebarProps> = (props) => {
   };
 
   // Drag and drop handlers
+  // Track the last valid drop target separately from the visual signal,
+  // because dragleave fires before dragend on Windows WebView2 and clears
+  // the dropTarget signal before we can read it in dragEnd.
+  let lastValidDropTarget: string | null = null;
+
   const handleDragStart = (e: DragEvent, path: string) => {
+    lastValidDropTarget = null;
     setDraggedItem(path);
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move';
@@ -461,15 +467,16 @@ const Sidebar: Component<SidebarProps> = (props) => {
   };
 
   const handleDragEnd = () => {
-    const target = dropTarget();
+    const target = lastValidDropTarget;
     const source = draggedItem();
 
-    // On Windows WebView2, the drop event may not fire even though dragover works.
-    // Use dragEnd + dropTarget signal as a fallback to complete the move.
+    // On Windows WebView2, the drop event never fires. Use the last valid
+    // drop target tracked during dragover as a fallback.
     if (source && target) {
       completeDrop(source, target);
     }
 
+    lastValidDropTarget = null;
     setDraggedItem(null);
     setDropTarget(null);
   };
@@ -506,6 +513,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
     if (e.dataTransfer) {
       e.dataTransfer.dropEffect = 'move';
     }
+    lastValidDropTarget = targetPath;
     setDropTarget(targetPath);
   };
 
@@ -818,6 +826,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
               return;
             }
             if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+            lastValidDropTarget = props.vaultPath;
             setDropTarget(props.vaultPath);
           }}
           onDragLeave={(e) => {
