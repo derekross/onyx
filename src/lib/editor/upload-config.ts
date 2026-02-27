@@ -1,7 +1,7 @@
 import { $prose } from '@milkdown/utils';
 import { Plugin, PluginKey } from '@milkdown/prose/state';
 import type { EditorView } from '@milkdown/prose/view';
-import { writeFile, readFile, mkdir, exists } from '@tauri-apps/plugin-fs';
+import { invoke } from '@tauri-apps/api/core';
 import { readImage } from '@tauri-apps/plugin-clipboard-manager';
 import { isWindows } from '../../lib/platform';
 
@@ -92,9 +92,11 @@ async function saveFileToVault(file: File, vaultPath: string): Promise<string> {
   const attachmentsDir = joinPath(vaultPath, 'attachments');
 
   // Ensure attachments directory exists
-  if (!(await exists(attachmentsDir))) {
+  // Uses Tauri commands which validate path is within vault (not subject to plugin-fs scope)
+  const dirExists = await invoke<boolean>('file_exists', { path: attachmentsDir });
+  if (!dirExists) {
     console.log('[Upload] Creating attachments directory:', attachmentsDir);
-    await mkdir(attachmentsDir, { recursive: true });
+    await invoke('create_folder', { path: attachmentsDir, vaultPath });
   }
 
   fileName = await getUniqueFileName(attachmentsDir, fileName);
@@ -115,7 +117,12 @@ async function saveFileToVault(file: File, vaultPath: string): Promise<string> {
       throw new Error('File content does not match the expected type. The file may be corrupted or mislabeled.');
     }
 
-    await writeFile(fullPath, new Uint8Array(arrayBuffer));
+    // Uses Tauri write_binary_file command which validates path is within vault
+    await invoke('write_binary_file', {
+      path: fullPath,
+      data: Array.from(new Uint8Array(arrayBuffer)),
+      vaultPath,
+    });
     console.log('[Upload] File written successfully');
 
     return relativePath;
@@ -141,9 +148,10 @@ async function copyFileToVault(sourcePath: string, vaultPath: string): Promise<s
   const attachmentsDir = joinPath(vaultPath, 'attachments');
 
   // Ensure attachments directory exists
-  if (!(await exists(attachmentsDir))) {
+  const dirExists = await invoke<boolean>('file_exists', { path: attachmentsDir });
+  if (!dirExists) {
     console.log('[Upload] Creating attachments directory:', attachmentsDir);
-    await mkdir(attachmentsDir, { recursive: true });
+    await invoke('create_folder', { path: attachmentsDir, vaultPath });
   }
 
   fileName = await getUniqueFileName(attachmentsDir, fileName);
@@ -154,12 +162,11 @@ async function copyFileToVault(sourcePath: string, vaultPath: string): Promise<s
   console.log('[Upload] Copying to fullPath:', fullPath);
 
   try {
-    // Read source file as binary using plugin-fs
-    const data = await readFile(sourcePath);
+    // Read source file and write to destination using Tauri commands
+    const data = await invoke<number[]>('read_binary_file', { path: sourcePath, vaultPath });
     console.log('[Upload] Read', data.length, 'bytes from source');
 
-    // Write to destination
-    await writeFile(fullPath, data);
+    await invoke('write_binary_file', { path: fullPath, data, vaultPath });
     console.log('[Upload] File copied successfully');
 
     return relativePath;
@@ -414,7 +421,7 @@ async function getUniqueFileName(directory: string, fileName: string): Promise<s
   let candidate = fileName;
   let counter = 1;
 
-  while (await exists(joinPath(directory, candidate))) {
+  while (await invoke<boolean>('file_exists', { path: joinPath(directory, candidate) })) {
     candidate = `${nameWithoutExt}-${counter}.${ext}`;
     counter++;
   }
