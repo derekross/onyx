@@ -106,7 +106,6 @@ async function saveFileToVault(file: File, vaultPath: string): Promise<string> {
   console.log('[Upload] relativePath:', relativePath);
 
   try {
-    // Use writeFile with Uint8Array directly - no JSON serialization overhead
     const arrayBuffer = await file.arrayBuffer();
     console.log('[Upload] Read', arrayBuffer.byteLength, 'bytes from file');
     

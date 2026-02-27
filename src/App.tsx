@@ -1,4 +1,4 @@
-import { Component, createSignal, createEffect, For, Show, onMount, onCleanup } from 'solid-js';
+import { Component, createSignal, createEffect, on, For, Show, onMount, onCleanup } from 'solid-js';
 import Sidebar from './components/Sidebar';
 import Editor from './components/Editor';
 import QuickSwitcher from './components/QuickSwitcher';
@@ -93,6 +93,18 @@ const App: Component = () => {
   const session = savedSession();
 
   const [vaultPath, setVaultPath] = createSignal<string | null>(null);
+
+  // Extend the plugin-fs scope whenever the vault path changes.
+  // This grants the webview's fs plugin read/write access to the user-chosen
+  // vault directory, which may be outside the static fs:scope paths.
+  createEffect(on(vaultPath, (path: string | null) => {
+    if (path) {
+      invoke('set_vault_scope', { vaultPath: path }).catch((err: unknown) => {
+        console.error('[App] Failed to set vault scope:', err);
+      });
+    }
+  }));
+
   const [tabs, setTabs] = createSignal<Tab[]>([]);
   const [activeTabIndex, setActiveTabIndex] = createSignal<number>(session?.activeTabIndex ?? -1);
   const [showQuickSwitcher, setShowQuickSwitcher] = createSignal(false);

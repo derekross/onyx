@@ -349,6 +349,24 @@ fn create_folder(path: String, vault_path: Option<String>) -> Result<(), String>
     fs::create_dir_all(&path).map_err(|e| e.to_string())
 }
 
+/// Dynamically extend the plugin-fs scope to include the user's vault directory.
+/// Called when the vault path is set so that plugin-fs operations (writeFile, mkdir, etc.)
+/// can access the vault. This is the secure alternative to broadening static fs:scope —
+/// only the specific vault directory chosen by the user is granted access at runtime.
+#[tauri::command]
+fn set_vault_scope(app: AppHandle, vault_path: String) -> Result<(), String> {
+    use tauri_plugin_fs::FsExt;
+    let path = Path::new(&vault_path);
+    if !path.exists() || !path.is_dir() {
+        return Err(format!("Vault path does not exist or is not a directory: {}", vault_path));
+    }
+    app.fs_scope()
+        .allow_directory(path, true)
+        .map_err(|e| format!("Failed to add vault to fs scope: {}", e))?;
+    println!("[Scope] Added vault to fs scope: {}", vault_path);
+    Ok(())
+}
+
 #[tauri::command]
 fn get_file_modified_time(path: String) -> Result<u64, String> {
     let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
@@ -2715,6 +2733,7 @@ pub fn run() {
             read_binary_file,
             create_file,
             create_folder,
+            set_vault_scope,
             get_file_modified_time,
             file_exists,
             delete_file,
