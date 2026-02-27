@@ -2,7 +2,6 @@ import { $prose } from '@milkdown/utils';
 import { Plugin, PluginKey } from '@milkdown/prose/state';
 import type { EditorView } from '@milkdown/prose/view';
 import { writeFile, readFile, mkdir, exists } from '@tauri-apps/plugin-fs';
-import { readImage } from '@tauri-apps/plugin-clipboard-manager';
 
 // Module-level state
 let currentVaultPath: string | null = null;
@@ -230,6 +229,49 @@ async function handleFileArray(files: File[], view: EditorView): Promise<boolean
 }
 
 /**
+ * Handle files from paste
+ */
+async function handleFiles(files: FileList, view: EditorView): Promise<boolean> {
+  console.log('[Upload] handleFiles called with', files.length, 'files');
+  console.log('[Upload] currentVaultPath:', currentVaultPath);
+
+  if (!currentVaultPath || files.length === 0) {
+    console.log('[Upload] No vault path or no files, returning false');
+    return false;
+  }
+
+  let handled = false;
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files.item(i);
+    if (!file) continue;
+
+    console.log('[Upload] Processing file', i, ':', file.name, 'type:', file.type);
+
+    // Check if file type is supported
+    if (!isSupportedFileType(file.type)) {
+      console.warn('[Upload] Unsupported file type:', file.type);
+      continue;
+    }
+
+    try {
+      const relativePath = await saveFileToVault(file, currentVaultPath);
+      insertEmbed(view, relativePath);
+      handled = true;
+    } catch (err) {
+      console.error('[Upload] Failed to save file:', err);
+    }
+  }
+
+  if (handled) {
+    console.log('[Upload] Files uploaded, triggering callback');
+    onFilesUploaded?.();
+  }
+
+  return handled;
+}
+
+/**
  * Handle pasted text that might be a file path
  */
 async function handleFilePath(text: string, view: EditorView): Promise<boolean> {
@@ -264,7 +306,7 @@ const uploadPluginKey = new PluginKey('vault-upload');
 
 /**
  * Custom ProseMirror plugin for handling file uploads via paste
- * Note: Drag-drop is handled separately by DOM drop event listeners
+ * Note: Drag-drop is handled separately by Tauri's tauri://drag-drop event
  */
 export const vaultUploadPlugin = $prose(() => {
   return new Plugin({
@@ -284,9 +326,6 @@ export const vaultUploadPlugin = $prose(() => {
           return false;
         }
 
-        // Log all available clipboard types for debugging
-        console.log('[Upload] Clipboard types:', Array.from(clipboardData.types));
-
         // First, check for files (images from clipboard)
         // On Windows, clipboardData.files may be empty or contain 0-byte entries
         // for screenshot pastes. We also check clipboardData.items as a fallback.
@@ -299,7 +338,6 @@ export const vaultUploadPlugin = $prose(() => {
         if (files && files.length > 0) {
           for (let i = 0; i < files.length; i++) {
             const file = files.item(i);
-            console.log('[Upload] File', i, ':', file?.name, 'type:', file?.type, 'size:', file?.size);
             if (file && file.size > 0 && isSupportedFileType(file.type)) {
               filesToHandle.push(file);
             }
@@ -311,10 +349,9 @@ export const vaultUploadPlugin = $prose(() => {
           for (let i = 0; i < clipboardData.items.length; i++) {
             const item = clipboardData.items[i];
             console.log('[Upload] Item', i, ':', item.kind, item.type);
-            if (item.kind === 'file') {
+            if (item.kind === 'file' && isSupportedFileType(item.type)) {
               const file = item.getAsFile();
-              console.log('[Upload] getAsFile result:', file?.name, 'type:', file?.type, 'size:', file?.size);
-              if (file && file.size > 0 && isSupportedFileType(file.type)) {
+              if (file && file.size > 0) {
                 filesToHandle.push(file);
               }
             }
@@ -331,53 +368,11 @@ export const vaultUploadPlugin = $prose(() => {
             try {
               await handleFileArray(fileList, view);
             } catch (err) {
-              console.error('[Upload] Error in handleFileArray:', err);
+              console.error('[Upload] Error in handleFiles:', err);
             }
           })();
 
           return true;
-        }
-
-        // Final fallback: use Tauri clipboard plugin to read image data directly.
-        // On Windows WebView2, clipboardData.files and clipboardData.items may not
-        // contain screenshot image data. The Tauri clipboard plugin reads from the
-        // native OS clipboard, bypassing WebView2 limitations.
-        {
-          // Only try this fallback if there's no plain text to paste
-          const hasText = clipboardData.types.includes('text/plain') && clipboardData.getData('text/plain');
-          if (!hasText) {
-            event.preventDefault();
-
-            (async () => {
-              try {
-                console.log('[Upload] Trying Tauri clipboard readImage fallback...');
-                const clipImage = await readImage();
-                const rgba = await clipImage.rgba();
-                const { width, height } = await clipImage.size();
-                console.log('[Upload] Clipboard image:', width, 'x', height, 'rgba bytes:', rgba.length);
-
-                if (rgba.length > 0 && width > 0 && height > 0) {
-                  // Convert RGBA to PNG using an offscreen canvas
-                  const canvas = new OffscreenCanvas(width, height);
-                  const ctx2d = canvas.getContext('2d');
-                  if (ctx2d) {
-                    const imageData = new ImageData(new Uint8ClampedArray(rgba), width, height);
-                    ctx2d.putImageData(imageData, 0, 0);
-                    const pngBlob = await canvas.convertToBlob({ type: 'image/png' });
-                    console.log('[Upload] Converted to PNG, size:', pngBlob.size);
-
-                    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-                    const file = new File([pngBlob], `pasted-${timestamp}.png`, { type: 'image/png' });
-                    await handleFileArray([file], view);
-                  }
-                }
-              } catch (err) {
-                console.log('[Upload] Tauri clipboard fallback failed:', err);
-              }
-            })();
-
-            return true;
-          }
         }
 
         // Check for text that might be a file path
@@ -406,7 +401,8 @@ export const vaultUploadPlugin = $prose(() => {
         return false;
       },
       // Note: handleDrop is intentionally NOT implemented here.
-      // OS file drops are handled via DOM drop event listeners in Editor.tsx.
+      // Tauri 2.x webview doesn't forward external OS file drops to DOM dataTransfer.files.
+      // Instead, drag-drop is handled via Tauri's tauri://drag-drop event listener in Editor.tsx.
     },
   });
 });
