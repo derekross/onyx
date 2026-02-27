@@ -6,8 +6,7 @@ import { nord } from '@milkdown/theme-nord';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
 import { TextSelection } from '@milkdown/prose/state';
 import { invoke } from '@tauri-apps/api/core';
-import { listen, UnlistenFn } from '@tauri-apps/api/event';
-import { readFile, writeFile, mkdir, exists } from '@tauri-apps/plugin-fs';
+import { writeFile, mkdir, exists } from '@tauri-apps/plugin-fs';
 import { hashtagPlugin, setHashtagClickHandler } from '../lib/hashtagPlugin';
 import { wikilinkPlugin, setWikilinkClickHandler, setWikilinkNoteIndex } from '../lib/editor/wikilink-plugin';
 import { NoteIndex } from '../lib/editor/note-index';
@@ -77,7 +76,8 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
   let containerRef: HTMLDivElement | undefined;
   let scrollDebounce: number | null = null;
   let scrollHandler: (() => void) | null = null;
-  let unlistenDragDrop: UnlistenFn | null = null;
+  let dropHandler: ((e: DragEvent) => void) | null = null;
+  let dragOverHandler: ((e: DragEvent) => void) | null = null;
   // Track the last content we set in the editor to detect external changes
   let lastEditorContent: string = '';
   // Source editor state: completely independent from Milkdown.
@@ -242,73 +242,71 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
 
         // Attach scroll listener to the editor content
         view.dom.addEventListener('scroll', scrollHandler, true);
-      }
 
-      // Set up Tauri drag-drop listener for file drops from OS
-      // Tauri 2.x webview doesn't forward external OS file drops to DOM dataTransfer.files
-      // so we use Tauri's native drag-drop event instead
-      if (!unlistenDragDrop) {
-        unlistenDragDrop = await listen<{ paths: string[] }>('tauri://drag-drop', async (event) => {
-          console.log('[DragDrop] Received tauri://drag-drop event:', event.payload.paths);
-
-          if (!props.vaultPath || !editorInstance?.ctx) {
-            console.log('[DragDrop] No vault path or editor, skipping');
-            return;
-          }
-
-          const view = editorInstance.ctx.get(editorViewCtx);
-
-          for (const sourcePath of event.payload.paths) {
-            // Check if file type is supported by extension
-            const ext = sourcePath.replace(/\\/g, '/').split('.').pop()?.toLowerCase();
-            if (!ext || !ALL_EXTENSIONS.includes(ext)) {
-              console.log('[DragDrop] Unsupported extension:', ext);
-              continue;
+        // Set up DOM drop handler for file drops from the OS file manager.
+        // dragDropEnabled is false in tauri.conf.json so that HTML5 drag events
+        // work on all platforms (Windows WebView2 blocks them otherwise).
+        if (!dropHandler) {
+          dragOverHandler = (e: DragEvent) => {
+            // Only accept external file drops (not sidebar internal drags)
+            if (e.dataTransfer?.types.includes('Files')) {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'copy';
             }
+          };
 
-            // Extract and sanitize filename
-            const rawName = sourcePath.replace(/\\/g, '/').split('/').pop() || `file.${ext}`;
-            const fileName = await getUniqueFileNameInVault(props.vaultPath, 'attachments', sanitizeFileName(rawName));
+          dropHandler = (e: DragEvent) => {
+            if (!e.dataTransfer?.files.length) return;
+            e.preventDefault();
 
-            // Ensure attachments directory exists
-            const attachmentsDir = joinPath(props.vaultPath, 'attachments');
-            if (!(await exists(attachmentsDir))) {
-              console.log('[DragDrop] Creating attachments directory:', attachmentsDir);
-              await mkdir(attachmentsDir, { recursive: true });
+            // Grab File objects synchronously before dataTransfer is invalidated
+            const droppedFiles: File[] = [];
+            for (let i = 0; i < e.dataTransfer.files.length; i++) {
+              const file = e.dataTransfer.files.item(i);
+              if (file && file.size > 0) droppedFiles.push(file);
             }
+            if (droppedFiles.length === 0) return;
 
-            try {
-              // Read source file and write to attachments
-              console.log('[DragDrop] Reading source file:', sourcePath);
-              const data = await readFile(sourcePath);
-              console.log('[DragDrop] Read', data.length, 'bytes');
+            (async () => {
+              if (!props.vaultPath || !editorInstance?.ctx) return;
+              const currentView = editorInstance.ctx.get(editorViewCtx);
 
-              const destPath = joinPath(attachmentsDir, fileName);
-              console.log('[DragDrop] Writing to:', destPath);
-              await writeFile(destPath, data);
+              for (const file of droppedFiles) {
+                const ext = file.name.split('.').pop()?.toLowerCase();
+                if (!ext || !ALL_EXTENSIONS.includes(ext)) {
+                  console.log('[DragDrop] Unsupported extension:', ext);
+                  continue;
+                }
 
-              // Insert embed at cursor position
-              const embedType = view.state.schema.nodes.embed;
-              if (embedType) {
-                const relativePath = `attachments/${fileName}`;
-                const node = embedType.create({
-                  target: relativePath,
-                  anchor: null,
-                  width: null,
-                  height: null,
-                });
-                const tr = view.state.tr.replaceSelectionWith(node);
-                view.dispatch(tr);
-                console.log('[DragDrop] Embed inserted:', relativePath);
+                const fileName = await getUniqueFileNameInVault(props.vaultPath, 'attachments', sanitizeFileName(file.name));
+                const attachmentsDir = joinPath(props.vaultPath, 'attachments');
+                if (!(await exists(attachmentsDir))) {
+                  await mkdir(attachmentsDir, { recursive: true });
+                }
+
+                try {
+                  const arrayBuffer = await file.arrayBuffer();
+                  const destPath = joinPath(attachmentsDir, fileName);
+                  await writeFile(destPath, new Uint8Array(arrayBuffer));
+
+                  const embedType = currentView.state.schema.nodes.embed;
+                  if (embedType) {
+                    const relativePath = `attachments/${fileName}`;
+                    const node = embedType.create({ target: relativePath, anchor: null, width: null, height: null });
+                    const tr = currentView.state.tr.replaceSelectionWith(node);
+                    currentView.dispatch(tr);
+                  }
+                } catch (err) {
+                  console.error('[DragDrop] Failed to process file:', err);
+                }
               }
-            } catch (err) {
-              console.error('[DragDrop] Failed to process file:', err);
-            }
-          }
+              props.onFilesUploaded?.();
+            })();
+          };
 
-          // Notify that files were uploaded
-          props.onFilesUploaded?.();
-        });
+          view.dom.addEventListener('dragover', dragOverHandler);
+          view.dom.addEventListener('drop', dropHandler);
+        }
       }
     }
   };
@@ -587,11 +585,18 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
         // Ignore errors if view is already destroyed
       }
     }
-    // Clean up Tauri drag-drop listener
-    if (unlistenDragDrop) {
-      unlistenDragDrop();
-      unlistenDragDrop = null;
+    // Clean up DOM drop handlers
+    if (editorInstance?.ctx) {
+      try {
+        const editorView = editorInstance.ctx.get(editorViewCtx);
+        if (dragOverHandler) editorView.dom.removeEventListener('dragover', dragOverHandler);
+        if (dropHandler) editorView.dom.removeEventListener('drop', dropHandler);
+      } catch (e) {
+        // Ignore if view is already destroyed
+      }
     }
+    dropHandler = null;
+    dragOverHandler = null;
     if (scrollDebounce) {
       clearTimeout(scrollDebounce);
     }

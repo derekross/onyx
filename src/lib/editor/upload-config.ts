@@ -2,6 +2,8 @@ import { $prose } from '@milkdown/utils';
 import { Plugin, PluginKey } from '@milkdown/prose/state';
 import type { EditorView } from '@milkdown/prose/view';
 import { writeFile, readFile, mkdir, exists } from '@tauri-apps/plugin-fs';
+import { readImage } from '@tauri-apps/plugin-clipboard-manager';
+import { isWindows } from '../../lib/platform';
 
 // Module-level state
 let currentVaultPath: string | null = null;
@@ -229,49 +231,6 @@ async function handleFileArray(files: File[], view: EditorView): Promise<boolean
 }
 
 /**
- * Handle files from paste
- */
-async function handleFiles(files: FileList, view: EditorView): Promise<boolean> {
-  console.log('[Upload] handleFiles called with', files.length, 'files');
-  console.log('[Upload] currentVaultPath:', currentVaultPath);
-
-  if (!currentVaultPath || files.length === 0) {
-    console.log('[Upload] No vault path or no files, returning false');
-    return false;
-  }
-
-  let handled = false;
-
-  for (let i = 0; i < files.length; i++) {
-    const file = files.item(i);
-    if (!file) continue;
-
-    console.log('[Upload] Processing file', i, ':', file.name, 'type:', file.type);
-
-    // Check if file type is supported
-    if (!isSupportedFileType(file.type)) {
-      console.warn('[Upload] Unsupported file type:', file.type);
-      continue;
-    }
-
-    try {
-      const relativePath = await saveFileToVault(file, currentVaultPath);
-      insertEmbed(view, relativePath);
-      handled = true;
-    } catch (err) {
-      console.error('[Upload] Failed to save file:', err);
-    }
-  }
-
-  if (handled) {
-    console.log('[Upload] Files uploaded, triggering callback');
-    onFilesUploaded?.();
-  }
-
-  return handled;
-}
-
-/**
  * Handle pasted text that might be a file path
  */
 async function handleFilePath(text: string, view: EditorView): Promise<boolean> {
@@ -397,12 +356,49 @@ export const vaultUploadPlugin = $prose(() => {
           }
         }
 
+        // Final fallback (Windows only): use Tauri clipboard plugin to read image
+        // data directly. On Windows WebView2, clipboardData may not expose screenshot
+        // image data through the standard files/items APIs. The Tauri clipboard plugin
+        // reads from the native OS clipboard, bypassing WebView2 limitations.
+        if (isWindows() && !text) {
+          event.preventDefault();
+
+          (async () => {
+            try {
+              console.log('[Upload] Trying Tauri clipboard readImage fallback...');
+              const clipImage = await readImage();
+              const rgba = await clipImage.rgba();
+              const { width, height } = await clipImage.size();
+
+              if (rgba.length > 0 && width > 0 && height > 0) {
+                // Convert RGBA to PNG using an offscreen canvas
+                const canvas = new OffscreenCanvas(width, height);
+                const ctx2d = canvas.getContext('2d');
+                if (ctx2d) {
+                  const imageData = new ImageData(new Uint8ClampedArray(rgba), width, height);
+                  ctx2d.putImageData(imageData, 0, 0);
+                  const pngBlob = await canvas.convertToBlob({ type: 'image/png' });
+
+                  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+                  const file = new File([pngBlob], `pasted-${timestamp}.png`, { type: 'image/png' });
+                  await handleFileArray([file], view);
+                }
+              }
+            } catch (err) {
+              // No image on clipboard or clipboard read failed — this is expected
+              // on Linux/macOS where the standard clipboard APIs work correctly.
+              console.log('[Upload] Tauri clipboard fallback: no image found');
+            }
+          })();
+
+          return true;
+        }
+
         console.log('[Upload] No supported content found');
         return false;
       },
       // Note: handleDrop is intentionally NOT implemented here.
-      // Tauri 2.x webview doesn't forward external OS file drops to DOM dataTransfer.files.
-      // Instead, drag-drop is handled via Tauri's tauri://drag-drop event listener in Editor.tsx.
+      // OS file drops are handled via DOM drop event listeners in Editor.tsx.
     },
   });
 });

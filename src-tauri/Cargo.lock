@@ -3030,7 +3030,7 @@ checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 
 [[package]]
 name = "onyx"
-version = "0.14.1"
+version = "0.14.3"
 dependencies = [
  "dirs 5.0.1",
  "flate2",
