@@ -435,41 +435,47 @@ const Sidebar: Component<SidebarProps> = (props) => {
     setMoveConfirm(null);
   };
 
-  // Global debug listener to check if drop events fire at all
-  if (typeof document !== 'undefined') {
-    document.addEventListener('drop', (e) => {
-      console.log('[DnD] GLOBAL drop event fired, target:', (e.target as HTMLElement)?.className);
-    }, true);
-    document.addEventListener('dragover', (_e) => {
-      // Don't log every dragover, just track that it fires
-    }, true);
-  }
-
   // Drag and drop handlers
   const handleDragStart = (e: DragEvent, path: string) => {
-    console.log('[DnD] dragStart:', path);
     setDraggedItem(path);
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', path);
-      console.log('[DnD] effectAllowed set to move, data set');
     }
   };
 
+  // Complete a drag-and-drop move to a target directory
+  const completeDrop = (sourcePath: string, targetPath: string) => {
+    const fileName = getFileName(sourcePath);
+    const sep = targetPath.includes('\\') ? '\\' : '/';
+    const newPath = `${targetPath}${sep}${fileName}`;
+
+    // Don't move to same location
+    if (sourcePath === newPath) return;
+
+    // Don't move if already in this directory
+    const sourceParent = getParentPath(sourcePath);
+    if (sourceParent === targetPath) return;
+
+    setMoveConfirm({ sourcePath, destPath: newPath, name: fileName });
+  };
+
   const handleDragEnd = () => {
-    console.log('[DnD] dragEnd');
+    const target = dropTarget();
+    const source = draggedItem();
+
+    // On Windows WebView2, the drop event may not fire even though dragover works.
+    // Use dragEnd + dropTarget signal as a fallback to complete the move.
+    if (source && target) {
+      completeDrop(source, target);
+    }
+
     setDraggedItem(null);
     setDropTarget(null);
   };
 
-  let dragOverLogged = false;
   const handleDragOver = (e: DragEvent, targetPath: string, isDir: boolean) => {
     e.preventDefault();
-    if (!dragOverLogged) {
-      console.log('[DnD] dragOver fired — target:', targetPath, 'isDir:', isDir, 'types:', e.dataTransfer?.types);
-      dragOverLogged = true;
-      setTimeout(() => { dragOverLogged = false; }, 500);
-    }
     const dragged = draggedItem();
     if (!dragged) {
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
@@ -514,55 +520,21 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
   const handleDrop = (e: DragEvent, targetPath: string) => {
     e.preventDefault();
-    console.log('[DnD] drop on:', targetPath);
     const sourcePath = draggedItem();
-    console.log('[DnD] sourcePath from signal:', sourcePath);
-    if (!sourcePath) return;
-
-    const fileName = getFileName(sourcePath);
-    const dropSep = targetPath.includes('\\') ? '\\' : '/';
-    const newPath = `${targetPath}${dropSep}${fileName}`;
-    console.log('[DnD] moving:', sourcePath, '->', newPath);
-
-    // Don't move to same location
-    if (sourcePath === newPath) {
-      setDraggedItem(null);
-      setDropTarget(null);
-      return;
+    if (sourcePath) {
+      completeDrop(sourcePath, targetPath);
     }
-
-    // Show confirmation modal
-    setMoveConfirm({ sourcePath, destPath: newPath, name: fileName });
-
     setDraggedItem(null);
     setDropTarget(null);
   };
 
   const handleDropOnRoot = (e: DragEvent) => {
     e.preventDefault();
-    console.log('[DnD] dropOnRoot');
     if (!props.vaultPath) return;
-
     const sourcePath = draggedItem();
-    console.log('[DnD] sourcePath from signal:', sourcePath);
-    if (!sourcePath) return;
-
-    const fileName = getFileName(sourcePath);
-    const rootSep = props.vaultPath.includes('\\') ? '\\' : '/';
-    const newPath = `${props.vaultPath}${rootSep}${fileName}`;
-    console.log('[DnD] moving to root:', sourcePath, '->', newPath);
-
-    // Don't move if already in root
-    const sourceParent = getParentPath(sourcePath);
-    if (sourceParent === props.vaultPath) {
-      setDraggedItem(null);
-      setDropTarget(null);
-      return;
+    if (sourcePath) {
+      completeDrop(sourcePath, props.vaultPath);
     }
-
-    // Show confirmation modal
-    setMoveConfirm({ sourcePath, destPath: newPath, name: fileName });
-
     setDraggedItem(null);
     setDropTarget(null);
   };
