@@ -1,5 +1,5 @@
 import { Component, onCleanup, Show, createSignal, createEffect, on } from 'solid-js';
-import { Editor, rootCtx, defaultValueCtx, editorViewCtx, parserCtx } from '@milkdown/core';
+import { Editor, rootCtx, defaultValueCtx, editorViewCtx, editorViewOptionsCtx, parserCtx } from '@milkdown/core';
 import { commonmark, remarkPreserveEmptyLinePlugin } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
 import { nord } from '@milkdown/theme-nord';
@@ -30,6 +30,9 @@ import {
 import { highlightPlugin } from '../lib/editor/highlight-plugin';
 import { commentPlugin } from '../lib/editor/comment-plugin';
 import { calloutPlugin } from '../lib/editor/callout-plugin';
+import { headingFoldPlugin } from '../lib/editor/heading-fold-plugin';
+import { linkInputRulePlugin, linkClickPlugin, linkRevealPlugin } from '../lib/editor/link-input-rule-plugin';
+import { keymapPlugin } from '../lib/editor/keymap-plugin';
 import { AssetIndex } from '../lib/editor/asset-index';
 import {
   vaultUploadPlugin,
@@ -69,6 +72,8 @@ interface EditorProps {
   onFilesUploaded?: () => void;
   // View mode: 'live' = rendered markdown, 'source' = raw markdown
   viewMode?: 'live' | 'source';
+  // Reader mode: locks editing (read-only)
+  readOnly?: boolean;
 }
 
 const MilkdownEditor: Component<EditorProps> = (props) => {
@@ -140,6 +145,14 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
         ctx.set(defaultValueCtx, initialContent);
       })
       .config(nord)
+      // Set initial editable state based on readOnly prop
+      .config((ctx) => {
+        ctx.update(editorViewOptionsCtx, (prev) => ({
+          ...prev,
+          editable: () => !props.readOnly,
+        }));
+      })
+      .use(keymapPlugin)
       .use(customCommonmark)
       .use(gfm)
       .use(embedSchema)
@@ -158,6 +171,10 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       .use(highlightPlugin)
       .use(commentPlugin)
       .use(calloutPlugin)
+      .use(headingFoldPlugin)
+      .use(linkInputRulePlugin)
+      .use(linkClickPlugin)
+      .use(linkRevealPlugin)
       // Configure listener after the plugin is loaded
       .config((ctx) => {
         ctx.get(listenerCtx).markdownUpdated((ctx, markdown, _prevMarkdown) => {
@@ -576,6 +593,22 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
           } catch (e) {
             console.error('Failed to scroll to block:', e);
           }
+        }
+      }
+    )
+  );
+
+  // Toggle ProseMirror editability when readOnly prop changes
+  createEffect(
+    on(
+      () => props.readOnly,
+      (readOnly) => {
+        if (!editorInstance?.ctx) return;
+        try {
+          const view = editorInstance.ctx.get(editorViewCtx);
+          view.setProps({ editable: () => !readOnly });
+        } catch (e) {
+          // View may not be ready yet, ignore
         }
       }
     )

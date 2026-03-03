@@ -810,6 +810,102 @@ body {
   flex-direction: column;
 }
 
+/* Editor Header */
+.editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-primary);
+  flex-shrink: 0;
+  min-height: 36px;
+}
+
+.editor-header-title-area {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.editor-header-title-input {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 6px;
+  outline: none;
+  width: 100%;
+  max-width: 400px;
+  font-family: inherit;
+  cursor: text;
+}
+
+.editor-header-title-input:hover {
+  background: var(--bg-secondary);
+}
+
+.editor-header-title-input:focus {
+  background: var(--bg-secondary);
+  border-color: var(--accent);
+}
+
+.editor-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.editor-header-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.editor-header-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.editor-header-btn.active {
+  color: var(--accent);
+}
+
+.editor-menu-container {
+  position: relative;
+}
+
+.editor-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+}
+
+.editor-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 1000;
+  min-width: 200px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 0;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  margin-top: 4px;
+}
+
 /* Milkdown Editor Styles */
 .milkdown-editor {
   height: 100%;
@@ -866,6 +962,8 @@ body {
 }
 
 /* Typography */
+.milkdown-editor h1, .milkdown-editor h2, .milkdown-editor h3,
+.milkdown-editor h4, .milkdown-editor h5, .milkdown-editor h6 { position: relative; }
 .milkdown-editor h1 { font-size: 2em; margin: 0.5em 0; }
 .milkdown-editor h2 { font-size: 1.5em; margin: 0.5em 0; }
 .milkdown-editor h3 { font-size: 1.25em; margin: 0.5em 0; }
@@ -877,6 +975,64 @@ body {
 .milkdown-editor blockquote { border-left: 4px solid var(--accent); padding-left: 1em; margin-left: 0; color: var(--text-secondary); }
 .milkdown-editor a { color: var(--accent); text-decoration: none; }
 .milkdown-editor a:hover { text-decoration: underline; }
+
+/* Footnotes */
+.milkdown-editor sup[data-type="footnote_reference"] {
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.75em;
+  vertical-align: super;
+  line-height: 0;
+  padding: 0 1px;
+}
+
+.milkdown-editor sup[data-type="footnote_reference"]::before {
+  content: '[';
+}
+
+.milkdown-editor sup[data-type="footnote_reference"]::after {
+  content: ']';
+}
+
+.milkdown-editor sup[data-type="footnote_reference"]:hover {
+  text-decoration: underline;
+}
+
+.milkdown-editor dl[data-type="footnote_definition"] {
+  display: flex;
+  gap: 8px;
+  margin: 0.5em 0;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 4px 4px 0;
+  font-size: 0.9em;
+  line-height: 1.5;
+}
+
+.milkdown-editor dl[data-type="footnote_definition"] dt {
+  color: var(--accent);
+  font-weight: 600;
+  flex-shrink: 0;
+  min-width: 1.5em;
+}
+
+.milkdown-editor dl[data-type="footnote_definition"] dt::before {
+  content: '[';
+}
+
+.milkdown-editor dl[data-type="footnote_definition"] dt::after {
+  content: ']:';
+}
+
+.milkdown-editor dl[data-type="footnote_definition"] dd {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.milkdown-editor dl[data-type="footnote_definition"] dd p {
+  margin: 0;
+}
 
 /* Hashtags */
 .milkdown-editor .hashtag {
@@ -922,6 +1078,23 @@ body {
   width: 0;
   display: inline-block;
   overflow: hidden;
+}
+
+/* Revealed wikilink brackets when cursor is inside the link */
+.milkdown-editor .wikilink-bracket-visible {
+  color: var(--text-secondary, #888);
+  opacity: 0.6;
+}
+
+/* Wikilink in editing mode (cursor inside) — show full raw syntax */
+.milkdown-editor .wikilink-editing {
+  text-decoration: none;
+}
+
+/* Link reveal: expanded [text](url) shown as editable raw text */
+.milkdown-editor .link-expanded {
+  color: var(--text-secondary, #888);
+  font-family: inherit;
 }
 
 /* Task List Items */
@@ -6538,6 +6711,45 @@ body {
 /* Nested paragraphs in callouts */
 .milkdown-editor .callout p + p {
   margin-top: 0.5em;
+}
+
+/* Heading fold chevrons */
+.milkdown-editor .heading-fold-chevron {
+  position: absolute;
+  left: -1.5em;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: pointer;
+  font-size: 0.55em;
+  color: var(--text-secondary, #888);
+  opacity: 0;
+  user-select: none;
+  transition: opacity 0.15s ease;
+}
+
+/* Show chevron on heading hover */
+.milkdown-editor h1:hover > .heading-fold-chevron,
+.milkdown-editor h2:hover > .heading-fold-chevron,
+.milkdown-editor h3:hover > .heading-fold-chevron,
+.milkdown-editor h4:hover > .heading-fold-chevron,
+.milkdown-editor h5:hover > .heading-fold-chevron,
+.milkdown-editor h6:hover > .heading-fold-chevron {
+  opacity: 0.6;
+}
+
+.milkdown-editor .heading-fold-chevron:hover {
+  opacity: 1 !important;
+}
+
+/* Always show chevron when folded */
+.milkdown-editor .heading-fold-chevron.folded {
+  opacity: 0.7;
+  color: var(--accent, #a78bfa);
+}
+
+/* Folded content is hidden */
+.milkdown-editor .heading-folded-content {
+  display: none;
 }
 
 /* ============================================
