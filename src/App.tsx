@@ -133,6 +133,12 @@ const App: Component = () => {
   const [editorViewMode, setEditorViewMode] = createSignal<'live' | 'source'>(
     (localStorage.getItem('editor_view_mode') as 'live' | 'source') || 'live'
   );
+  // Reader mode: locks editing
+  const [readerMode, setReaderMode] = createSignal(false);
+  // Editor header three-dot menu
+  const [editorMenuOpen, setEditorMenuOpen] = createSignal(false);
+  // Ref for the editor header title input (for programmatic focus)
+  let editorHeaderTitleRef: HTMLInputElement | undefined;
   // Flag to prevent settings save effect from running before initial load completes
   const [settingsLoaded, setSettingsLoaded] = createSignal(false);
   const [showSettings, setShowSettings] = createSignal(false);
@@ -1582,6 +1588,101 @@ const App: Component = () => {
     await syncPreferencesToNostr(updated, savedSearches());
   };
 
+  // Editor header actions
+  const editorHeaderRename = async (newName: string) => {
+    const tab = currentTab();
+    if (!tab?.path || !vaultPath()) return;
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+
+    const oldPath = tab.path;
+    const parentPath = oldPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+    const newPath = `${parentPath}/${trimmed}.md`;
+    if (newPath === oldPath) return;
+
+    try {
+      await invoke('rename_file', { oldPath, newPath, vaultPath: vaultPath() });
+      // Update tab
+      setTabs(tabs().map(t => t.path === oldPath ? { ...t, path: newPath, name: trimmed } : t));
+      handleFileMoved(oldPath, newPath);
+    } catch (err) {
+      console.error('Failed to rename:', err);
+    }
+  };
+
+  const editorHeaderMakeCopy = async () => {
+    const tab = currentTab();
+    if (!tab?.path || !vaultPath()) return;
+    const fileName = tab.path.replace(/\\/g, '/').split('/').pop() || '';
+    const parentPath = tab.path.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+    const ext = fileName.includes('.') ? fileName.substring(fileName.lastIndexOf('.')) : '';
+    const baseName = ext ? fileName.substring(0, fileName.lastIndexOf('.')) : fileName;
+    const copyPath = `${parentPath}/${baseName} copy${ext}`;
+    try {
+      await invoke('copy_file', { source: tab.path, dest: copyPath, vaultPath: vaultPath() });
+      refreshSidebar?.();
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+    setEditorMenuOpen(false);
+  };
+
+  const editorHeaderMoveTo = async () => {
+    const tab = currentTab();
+    if (!tab?.path || !vaultPath()) return;
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({ directory: true, multiple: false, title: 'Move to...' });
+      if (selected && typeof selected === 'string') {
+        const fileName = tab.path.replace(/\\/g, '/').split('/').pop() || '';
+        const destPath = `${selected}/${fileName}`;
+        await invoke('rename_file', { oldPath: tab.path, newPath: destPath, vaultPath: vaultPath() });
+        setTabs(tabs().map(t => t.path === tab.path ? { ...t, path: destPath } : t));
+        handleFileMoved(tab.path, destPath);
+        refreshSidebar?.();
+      }
+    } catch (err) {
+      console.error('Failed to move:', err);
+    }
+    setEditorMenuOpen(false);
+  };
+
+  const editorHeaderCopyPath = async () => {
+    const tab = currentTab();
+    if (tab?.path) {
+      try { await navigator.clipboard.writeText(tab.path); } catch {}
+    }
+    setEditorMenuOpen(false);
+  };
+
+  const editorHeaderOpenInDefaultApp = async () => {
+    const tab = currentTab();
+    if (tab?.path) {
+      try { await invoke('open_in_default_app', { path: tab.path }); } catch {}
+    }
+    setEditorMenuOpen(false);
+  };
+
+  const editorHeaderShowInFolder = async () => {
+    const tab = currentTab();
+    if (tab?.path) {
+      try { await invoke('show_in_folder', { path: tab.path }); } catch {}
+    }
+    setEditorMenuOpen(false);
+  };
+
+  const editorHeaderDelete = async () => {
+    const tab = currentTab();
+    if (!tab?.path || !vaultPath()) return;
+    try {
+      await invoke('delete_file', { path: tab.path, vaultPath: vaultPath() });
+      handleFileDeleted(tab.path);
+    } catch (err) {
+      console.error('Failed to delete:', err);
+    }
+    setEditorMenuOpen(false);
+  };
+
   const toggleSavedSearch = async (query: string) => {
     const current = savedSearches();
     let updated: string[];
@@ -2720,6 +2821,113 @@ const App: Component = () => {
         <div class="content-area">
           {/* Editor, Viewer, or Graph View */}
           <div class="editor-area">
+            {/* Editor Header: editable file name + reader mode + three-dot menu */}
+            <Show when={currentTab()?.path && !showGraphView()}>
+              <div class="editor-header">
+                <div class="editor-header-title-area">
+                  <input
+                    class="editor-header-title-input"
+                    value={currentTab()!.name}
+                    ref={(el) => { editorHeaderTitleRef = el; }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        editorHeaderRename(e.currentTarget.value);
+                        e.currentTarget.blur();
+                      }
+                      if (e.key === 'Escape') {
+                        e.currentTarget.value = currentTab()!.name;
+                        e.currentTarget.blur();
+                      }
+                    }}
+                    onBlur={(e) => editorHeaderRename(e.currentTarget.value)}
+                    spellcheck={false}
+                  />
+                </div>
+                <div class="editor-header-actions">
+                  {/* Reader mode toggle */}
+                  <button
+                    class={`editor-header-btn ${readerMode() ? 'active' : ''}`}
+                    onClick={() => setReaderMode(!readerMode())}
+                    title={readerMode() ? 'Exit reader mode' : 'Enter reader mode'}
+                  >
+                    <Show when={readerMode()} fallback={
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+                        <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+                      </svg>
+                    }>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 20h9"></path>
+                        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                      </svg>
+                    </Show>
+                  </button>
+                  {/* Three-dot menu */}
+                  <div class="editor-menu-container">
+                    <button
+                      class="editor-header-btn"
+                      onClick={() => setEditorMenuOpen(!editorMenuOpen())}
+                      title="More options"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <circle cx="12" cy="5" r="1.5"></circle>
+                        <circle cx="12" cy="12" r="1.5"></circle>
+                        <circle cx="12" cy="19" r="1.5"></circle>
+                      </svg>
+                    </button>
+                    <Show when={editorMenuOpen()}>
+                      <div class="editor-menu-backdrop" onClick={() => setEditorMenuOpen(false)} />
+                      <div class="editor-menu">
+                        <div class="context-menu-item" onClick={() => { const tab = currentTab(); if (tab) openFile(tab.path); setEditorMenuOpen(false); }}>
+                          Open in new tab
+                        </div>
+                        <div class="context-menu-divider" />
+                        <div class="context-menu-item" onClick={editorHeaderMakeCopy}>
+                          Make a copy
+                        </div>
+                        <div class="context-menu-item" onClick={editorHeaderMoveTo}>
+                          Move file to...
+                        </div>
+                        <div class="context-menu-item" onClick={() => { const tab = currentTab(); if (tab) toggleBookmark(tab.path); setEditorMenuOpen(false); }}>
+                          {currentTab()?.path && bookmarks().includes(currentTab()!.path) ? 'Remove bookmark' : 'Bookmark'}
+                        </div>
+                        <div class="context-menu-item" onClick={() => { const tab = currentTab(); if (tab) handleFileInfo(tab.path); setEditorMenuOpen(false); }}>
+                          File info...
+                        </div>
+                        <Show when={currentTab()?.path?.endsWith('.md')}>
+                          <div class="context-menu-divider" />
+                          <div class="context-menu-label">Nostr</div>
+                          <div class="context-menu-item" onClick={() => { const tab = currentTab(); if (tab) handleShareFile(tab.path, tab.content); setEditorMenuOpen(false); }}>
+                            Share with user...
+                          </div>
+                          <div class="context-menu-item" onClick={() => { const tab = currentTab(); if (tab) handlePostToNostr(tab.path, tab.content, tab.name); setEditorMenuOpen(false); }}>
+                            Publish as article...
+                          </div>
+                        </Show>
+                        <div class="context-menu-divider" />
+                        <div class="context-menu-item" onClick={editorHeaderCopyPath}>
+                          Copy path
+                        </div>
+                        <div class="context-menu-item" onClick={editorHeaderOpenInDefaultApp}>
+                          Open in default app
+                        </div>
+                        <div class="context-menu-item" onClick={editorHeaderShowInFolder}>
+                          Show in system explorer
+                        </div>
+                        <div class="context-menu-divider" />
+                        <div class="context-menu-item" onClick={() => { setEditorMenuOpen(false); editorHeaderTitleRef?.focus(); editorHeaderTitleRef?.select(); }}>
+                          Rename
+                        </div>
+                        <div class="context-menu-item danger" onClick={editorHeaderDelete}>
+                          Delete
+                        </div>
+                      </div>
+                    </Show>
+                  </div>
+                </div>
+              </div>
+            </Show>
+
             <Show when={currentTab()?.fileType && currentTab()!.fileType !== 'markdown'} fallback={
               <Show when={showGraphView()} fallback={
                 <Editor
@@ -2742,6 +2950,7 @@ const App: Component = () => {
                   scrollToHeadingText={scrollToHeadingText()}
                   scrollToBlockId={scrollToBlockId()}
                   viewMode={editorViewMode()}
+                  readOnly={readerMode()}
                   onFilesUploaded={async () => {
                     // Rebuild asset index after files are uploaded
                     if (vaultPath()) {

@@ -12,6 +12,9 @@
  * - [[#heading]] - Link to heading in current note
  * - [[^blockid]] - Link to block in current note
  * - [[note#^blockid]] - Alternative block reference syntax
+ *
+ * Cursor awareness: When the cursor is inside a wikilink, the [[ and ]]
+ * brackets are revealed so the user can edit the full link syntax.
  */
 
 import { $prose } from '@milkdown/utils';
@@ -97,8 +100,18 @@ function navigateToAnchor(view: EditorView, heading: string | null, blockId: str
   return false;
 }
 
-// Find all wikilinks in the document and create decorations
-function findWikilinks(doc: any): DecorationSet {
+/** Wikilink range info for cursor awareness */
+interface WikilinkRange {
+  fullStart: number;
+  fullEnd: number;
+}
+
+/**
+ * Find all wikilinks in the document and create decorations.
+ * When cursorPos is inside a wikilink, that wikilink's brackets are
+ * shown (not hidden) so the user can edit the full syntax.
+ */
+function findWikilinks(doc: any, cursorPos: number | null): DecorationSet {
   const decorations: Decoration[] = [];
 
   doc.descendants((node: any, pos: number) => {
@@ -144,29 +157,86 @@ function findWikilinks(doc: any): DecorationSet {
                    currentNoteIndex.byRelativePath.has(target.replace(/\.md$/i, ''));
         }
 
-        // Decoration for opening [[
-        decorations.push(Decoration.inline(openBracketStart, openBracketEnd, {
-          class: 'wikilink-bracket',
-        }));
+        // Check if cursor is inside this wikilink (between [[ and ]])
+        const cursorInside = cursorPos !== null &&
+          cursorPos >= openBracketStart && cursorPos <= closeBracketEnd;
 
-        // Decoration for the link content
-        decorations.push(Decoration.inline(contentStart, contentEnd, {
-          class: exists ? 'wikilink' : 'wikilink broken',
-          'data-target': target,
-          'data-heading': heading || '',
-          'data-block': blockId || '',
-          'data-alias': alias || '',
-        }));
+        if (cursorInside) {
+          // Cursor is inside: show brackets with a subtle style
+          decorations.push(Decoration.inline(openBracketStart, openBracketEnd, {
+            class: 'wikilink-bracket-visible',
+          }));
 
-        // Decoration for closing ]]
-        decorations.push(Decoration.inline(closeBracketStart, closeBracketEnd, {
-          class: 'wikilink-bracket',
-        }));
+          // Show the full raw content (target|alias, #heading, etc.) with editing style
+          decorations.push(Decoration.inline(contentStart, contentEnd, {
+            class: (exists ? 'wikilink' : 'wikilink broken') + ' wikilink-editing',
+            'data-target': target,
+            'data-heading': heading || '',
+            'data-block': blockId || '',
+            'data-alias': alias || '',
+          }));
+
+          decorations.push(Decoration.inline(closeBracketStart, closeBracketEnd, {
+            class: 'wikilink-bracket-visible',
+          }));
+        } else {
+          // Cursor is outside: hide brackets, show styled link
+          decorations.push(Decoration.inline(openBracketStart, openBracketEnd, {
+            class: 'wikilink-bracket',
+          }));
+
+          decorations.push(Decoration.inline(contentStart, contentEnd, {
+            class: exists ? 'wikilink' : 'wikilink broken',
+            'data-target': target,
+            'data-heading': heading || '',
+            'data-block': blockId || '',
+            'data-alias': alias || '',
+          }));
+
+          decorations.push(Decoration.inline(closeBracketStart, closeBracketEnd, {
+            class: 'wikilink-bracket',
+          }));
+        }
       }
     }
   });
 
   return DecorationSet.create(doc, decorations);
+}
+
+/**
+ * Find all wikilink ranges in the document (for efficient cursor-in-wikilink checks).
+ */
+function findWikilinkRanges(doc: any): WikilinkRange[] {
+  const ranges: WikilinkRange[] = [];
+  doc.descendants((node: any, pos: number) => {
+    if (node.isText) {
+      const text = node.text || '';
+      WIKILINK_REGEX.lastIndex = 0;
+      let match;
+      while ((match = WIKILINK_REGEX.exec(text)) !== null) {
+        const fullStart = pos + match.index;
+        const fullEnd = fullStart + match[0].length;
+        ranges.push({ fullStart, fullEnd });
+      }
+    }
+  });
+  return ranges;
+}
+
+/** Find which wikilink range the cursor is inside, or null */
+function findCursorWikilink(ranges: WikilinkRange[], cursorPos: number): WikilinkRange | null {
+  for (const r of ranges) {
+    if (cursorPos >= r.fullStart && cursorPos <= r.fullEnd) return r;
+  }
+  return null;
+}
+
+interface WikilinkPluginState {
+  decorations: DecorationSet;
+  ranges: WikilinkRange[];
+  // The wikilink range the cursor is currently inside (null if outside all)
+  activeWikilink: WikilinkRange | null;
 }
 
 // Create the ProseMirror plugin for wikilinks
@@ -175,21 +245,52 @@ export const wikilinkPlugin = $prose(() => {
     key: wikilinkPluginKey,
 
     state: {
-      init(_, { doc }) {
-        return findWikilinks(doc);
+      init(_, { doc }): WikilinkPluginState {
+        const ranges = findWikilinkRanges(doc);
+        return {
+          decorations: findWikilinks(doc, null),
+          ranges,
+          activeWikilink: null,
+        };
       },
-      apply(tr, oldState) {
-        // Only recalculate if the document changed
+      apply(tr, oldState: WikilinkPluginState): WikilinkPluginState {
         if (tr.docChanged) {
-          return findWikilinks(tr.doc);
+          // Document changed: rebuild everything
+          const cursorPos = tr.selection?.head ?? null;
+          const ranges = findWikilinkRanges(tr.doc);
+          const active = cursorPos !== null ? findCursorWikilink(ranges, cursorPos) : null;
+          return {
+            decorations: findWikilinks(tr.doc, cursorPos),
+            ranges,
+            activeWikilink: active,
+          };
         }
-        return oldState.map(tr.mapping, tr.doc);
+
+        // Selection changed without doc change
+        const cursorPos = tr.selection?.head ?? null;
+        const active = cursorPos !== null ? findCursorWikilink(oldState.ranges, cursorPos) : null;
+
+        // Only rebuild decorations if the active wikilink changed
+        const oldActive = oldState.activeWikilink;
+        const sameWikilink = active && oldActive &&
+          active.fullStart === oldActive.fullStart && active.fullEnd === oldActive.fullEnd;
+
+        if (!sameWikilink && (active !== null || oldActive !== null)) {
+          return {
+            decorations: findWikilinks(tr.doc, cursorPos),
+            ranges: oldState.ranges,
+            activeWikilink: active,
+          };
+        }
+
+        return oldState;
       },
     },
 
     props: {
       decorations(state) {
-        return this.getState(state);
+        const pluginState = this.getState(state) as WikilinkPluginState | undefined;
+        return pluginState?.decorations || DecorationSet.empty;
       },
 
       // When the user types the closing ]] of a wikilink, automatically
