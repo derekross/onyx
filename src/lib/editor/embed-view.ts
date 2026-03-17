@@ -126,25 +126,23 @@ function renderVideo(
 }
 
 /**
- * Render a PDF embed
+ * Render a PDF embed using PDF.js canvas rendering
  * anchor can be "page=N" or "height=N"
  */
-function renderPdf(
+async function renderPdf(
   container: HTMLElement,
   resolvedPath: string,
   anchor: string | null,
   height: number | null
-): void {
-  const iframe = document.createElement('iframe');
-  let src = getMediaSrc(resolvedPath);
+): Promise<void> {
+  let pageNumber: number | null = null;
 
-  // Parse anchor for page number
+  // Parse anchor for page number or height
   if (anchor) {
     const pageMatch = anchor.match(/^page=(\d+)$/);
     if (pageMatch) {
-      src += `#page=${pageMatch[1]}`;
+      pageNumber = parseInt(pageMatch[1], 10);
     }
-    // Parse height from anchor if not provided
     if (!height) {
       const heightMatch = anchor.match(/^height=(\d+)$/);
       if (heightMatch) {
@@ -153,18 +151,51 @@ function renderPdf(
     }
   }
 
-  iframe.src = src;
-  iframe.className = 'embed-pdf';
-  iframe.style.width = '100%';
-  iframe.style.height = height ? `${height}px` : '500px';
-  iframe.style.border = 'none';
+  const wrapper = document.createElement('div');
+  wrapper.className = 'embed-pdf';
+  wrapper.style.width = '100%';
+  wrapper.style.height = height ? `${height}px` : '500px';
+  wrapper.style.overflow = 'auto';
+  container.appendChild(wrapper);
 
-  iframe.onerror = () => {
+  try {
+    // Read file via Tauri
+    const data = await invoke<number[]>('read_binary_file', {
+      path: resolvedPath,
+      vaultPath: currentVaultPath,
+    });
+
+    // Lazy-load PDF.js
+    const pdfjsLib = await import('pdfjs-dist');
+    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+      'pdfjs-dist/build/pdf.worker.mjs',
+      import.meta.url
+    ).toString();
+
+    const uint8Array = new Uint8Array(data);
+    const pdf = await pdfjsLib.getDocument({ data: uint8Array }).promise;
+
+    // Render specific page or all pages
+    const startPage = pageNumber || 1;
+    const endPage = pageNumber || pdf.numPages;
+
+    for (let i = startPage; i <= endPage; i++) {
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 1.5 });
+
+      const canvas = document.createElement('canvas');
+      canvas.className = 'pdf-page-canvas';
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      wrapper.appendChild(canvas);
+
+      await page.render({ canvas, viewport }).promise;
+    }
+  } catch (err) {
+    console.error('Failed to render embedded PDF:', err);
     container.innerHTML = '';
     renderBroken(container, resolvedPath, 'pdf');
-  };
-
-  container.appendChild(iframe);
+  }
 }
 
 /**

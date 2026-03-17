@@ -198,25 +198,60 @@ function renderVideo(container: HTMLElement, resolvedPath: string, width: number
   container.appendChild(video);
 }
 
-function renderPdf(container: HTMLElement, resolvedPath: string, anchor: string | null, height: number | null): void {
-  const iframe = document.createElement('iframe');
-  let src = getMediaSrc(resolvedPath);
+async function renderPdf(container: HTMLElement, resolvedPath: string, anchor: string | null, height: number | null): Promise<void> {
+  let pageNumber: number | null = null;
 
   if (anchor) {
     const pageMatch = anchor.match(/^page=(\d+)$/);
-    if (pageMatch) src += `#page=${pageMatch[1]}`;
+    if (pageMatch) pageNumber = parseInt(pageMatch[1], 10);
     if (!height) {
       const heightMatch = anchor.match(/^height=(\d+)$/);
       if (heightMatch) height = parseInt(heightMatch[1], 10);
     }
   }
 
-  iframe.src = src;
-  iframe.className = 'embed-pdf';
-  iframe.style.width = '100%';
-  iframe.style.height = height ? `${height}px` : '500px';
-  iframe.style.border = 'none';
-  container.appendChild(iframe);
+  const wrapper = document.createElement('div');
+  wrapper.className = 'embed-pdf';
+  wrapper.style.width = '100%';
+  wrapper.style.height = height ? `${height}px` : '500px';
+  wrapper.style.overflow = 'auto';
+  container.appendChild(wrapper);
+
+  try {
+    const data = await invoke<number[]>('read_binary_file', {
+      path: resolvedPath,
+      vaultPath: currentVaultPath,
+    });
+
+    const pdfjsLib = await import('pdfjs-dist');
+    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+      'pdfjs-dist/build/pdf.worker.mjs',
+      import.meta.url
+    ).toString();
+
+    const uint8Array = new Uint8Array(data);
+    const pdf = await pdfjsLib.getDocument({ data: uint8Array }).promise;
+
+    const startPage = pageNumber || 1;
+    const endPage = pageNumber || pdf.numPages;
+
+    for (let i = startPage; i <= endPage; i++) {
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 1.5 });
+
+      const canvas = document.createElement('canvas');
+      canvas.className = 'pdf-page-canvas';
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      wrapper.appendChild(canvas);
+
+      await page.render({ canvas, viewport }).promise;
+    }
+  } catch (err) {
+    console.error('Failed to render embedded PDF:', err);
+    container.innerHTML = '';
+    renderBroken(container, resolvedPath, 'pdf');
+  }
 }
 
 async function renderNote(container: HTMLElement, target: string, anchor: string | null): Promise<void> {

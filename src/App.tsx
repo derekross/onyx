@@ -20,6 +20,7 @@ import FileInfoDialog from './components/FileInfoDialog';
 import PostToNostrDialog from './components/PostToNostrDialog';
 import DocxViewer from './components/DocxViewer';
 import XlsxViewer from './components/XlsxViewer';
+import PdfViewer from './components/PdfViewer';
 import PptxViewer from './components/PptxViewer';
 import Onboarding, { type OnboardingResult } from './components/Onboarding';
 import { MobileHeader, MobileNav, MobileDrawer, type MobileNavTab } from './components/mobile';
@@ -2775,12 +2776,7 @@ const App: Component = () => {
                   </div>
                 </Show>
                 <Show when={currentTab()?.fileType === 'pdf'}>
-                  <div class="pdf-viewer">
-                    <iframe
-                      src={convertFileSrc(currentTab()!.path)}
-                      title={currentTab()!.name}
-                    />
-                  </div>
+                  <PdfViewer path={currentTab()!.path} vaultPath={vaultPath()} />
                 </Show>
                 <Show when={currentTab()?.fileType === 'docx'}>
                   <DocxViewer path={currentTab()!.path} vaultPath={vaultPath()} />

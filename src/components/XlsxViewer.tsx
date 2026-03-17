@@ -35,34 +35,92 @@ const XlsxViewer: Component<XlsxViewerProps> = (props) => {
         const data = await invoke<number[]>('read_binary_file', { path: filePath, vaultPath: props.vaultPath });
         if (cancelled) return;
 
-        // Lazy-load xlsx
-        const XLSX = await import('xlsx');
+        // Lazy-load xlsx and HyperFormula
+        const [XLSX, { HyperFormula }] = await Promise.all([
+          import('xlsx'),
+          import('hyperformula'),
+        ]);
         if (cancelled) return;
 
-        // Parse workbook
+        // Parse workbook with formulas preserved
         const arrayBuffer = new Uint8Array(data);
-        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+        const workbook = XLSX.read(arrayBuffer, { type: 'array', cellFormula: true, sheetStubs: true });
 
-        const parsedSheets: SheetData[] = [];
+        // Build sheet data for HyperFormula: array of arrays per sheet
+        const sheetData: Record<string, (string | number | boolean | null)[][]> = {};
+        const sheetNames: string[] = [];
+
         for (const sheetName of workbook.SheetNames) {
+          sheetNames.push(sheetName);
           const worksheet = workbook.Sheets[sheetName];
-          // Convert to array of arrays
-          const jsonData = XLSX.utils.sheet_to_json<string[]>(worksheet, {
-            header: 1,
-            defval: '',
-          });
+          const ref = worksheet['!ref'];
+          if (!ref) {
+            sheetData[sheetName] = [[]];
+            continue;
+          }
 
-          if (jsonData.length === 0) {
+          const range = XLSX.utils.decode_range(ref);
+          const rows: (string | number | boolean | null)[][] = [];
+
+          for (let r = range.s.r; r <= range.e.r; r++) {
+            const row: (string | number | boolean | null)[] = [];
+            for (let c = range.s.c; c <= range.e.c; c++) {
+              const cellRef = XLSX.utils.encode_cell({ r, c });
+              const cell = worksheet[cellRef];
+              if (!cell) {
+                row.push(null);
+              } else if (cell.f) {
+                // Cell has a formula - pass it to HyperFormula for evaluation
+                row.push('=' + cell.f);
+              } else if (cell.v !== undefined && cell.v !== null) {
+                row.push(cell.v);
+              } else {
+                row.push(null);
+              }
+            }
+            rows.push(row);
+          }
+
+          sheetData[sheetName] = rows.length > 0 ? rows : [[]];
+        }
+
+        // Build HyperFormula instance with all sheets for cross-sheet references
+        const hfSheets: Record<string, (string | number | boolean | null)[][]> = {};
+        for (const name of sheetNames) {
+          hfSheets[name] = sheetData[name];
+        }
+
+        const hf = HyperFormula.buildFromSheets(hfSheets, {
+          licenseKey: 'gpl-v3',
+        });
+
+        // Extract computed values from HyperFormula
+        const parsedSheets: SheetData[] = [];
+        for (let si = 0; si < sheetNames.length; si++) {
+          const sheetName = sheetNames[si];
+          const computed = hf.getSheetSerialized(si);
+
+          if (!computed || computed.length === 0) {
             parsedSheets.push({ name: sheetName, headers: [], rows: [] });
             continue;
           }
 
-          // First row as headers
-          const headers = (jsonData[0] || []).map(String);
-          const rows = jsonData.slice(1).map(row => row.map(String));
+          // Use getSheetValues to get the calculated values (not formulas)
+          const values = hf.getSheetValues(si);
+          const allRows: string[][] = values.map((row: any[]) =>
+            row.map((cell: any) => {
+              if (cell === null || cell === undefined) return '';
+              return String(cell);
+            })
+          );
 
-          parsedSheets.push({ name: sheetName, headers, rows });
+          const headers = allRows[0] || [];
+          const dataRows = allRows.slice(1);
+
+          parsedSheets.push({ name: sheetName, headers, rows: dataRows });
         }
+
+        hf.destroy();
 
         if (cancelled) return;
         setSheets(parsedSheets);
