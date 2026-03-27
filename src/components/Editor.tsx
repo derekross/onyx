@@ -84,7 +84,7 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
   let lastEditorContent: string = '';
   // Source editor state: completely independent from Milkdown.
   // Reads/writes directly to disk, never touches Milkdown's serializer.
-  const [sourceContent, setSourceContent] = createSignal('');
+  const [_sourceContent, setSourceContent] = createSignal('');
   let sourceAutoSaveTimeout: number | null = null;
 
   const saveFile = async () => {

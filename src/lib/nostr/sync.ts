@@ -40,6 +40,19 @@ import {
 import type { NostrSigner } from './signer';
 
 /**
+ * NIP-44 has a hard limit of 65,535 bytes for plaintext.
+ * We use a safe margin below that to account for UTF-8 multi-byte characters.
+ */
+const NIP44_CHUNK_SIZE = 60000;
+
+/**
+ * Prefix used to identify chunked encrypted payloads.
+ * When decrypting, if the first chunk decrypts to a string starting with this prefix,
+ * the content is treated as a chunked payload that needs reassembly.
+ */
+const CHUNKED_PREFIX = '{"_chunked":true,"total":';
+
+/**
  * Sync Engine class
  */
 export class SyncEngine {
@@ -170,35 +183,156 @@ export class SyncEngine {
   }
 
   /**
-   * Encrypt content using NIP-44
-   * For NIP-46, uses remote encryption; for local, uses conversation key
+   * Low-level NIP-44 encrypt (single chunk, must be <=65535 bytes)
    */
-  private async encryptContent(plaintext: string): Promise<string> {
-    if (this.signer?.nip44 && this.pubkey) {
-      // Use signer's NIP-44 (works for both local and remote)
-      return await this.signer.nip44.encrypt(this.pubkey, plaintext);
-    } else if (this.conversationKey) {
-      // Legacy: use conversation key directly
+  private async encryptSingle(plaintext: string, recipientPubkey?: string): Promise<string> {
+    const targetPubkey = recipientPubkey ?? this.pubkey;
+    if (this.signer?.nip44 && targetPubkey) {
+      return await this.signer.nip44.encrypt(targetPubkey, plaintext);
+    } else if (!recipientPubkey && this.conversationKey) {
       return nip44.v2.encrypt(plaintext, this.conversationKey);
+    } else if (recipientPubkey && this.identity) {
+      const conversationKey = nip44.v2.utils.getConversationKey(
+        hexToBytes(this.identity.privkey),
+        recipientPubkey
+      );
+      return nip44.v2.encrypt(plaintext, conversationKey);
     } else {
       throw new Error('No encryption method available');
     }
   }
 
   /**
-   * Decrypt content using NIP-44
-   * For NIP-46, uses remote decryption; for local, uses conversation key
+   * Low-level NIP-44 decrypt (single chunk)
    */
-  private async decryptContent(ciphertext: string): Promise<string> {
-    if (this.signer?.nip44 && this.pubkey) {
-      // Use signer's NIP-44 (works for both local and remote)
-      return await this.signer.nip44.decrypt(this.pubkey, ciphertext);
-    } else if (this.conversationKey) {
-      // Legacy: use conversation key directly
+  private async decryptSingle(ciphertext: string, senderPubkey?: string): Promise<string> {
+    const targetPubkey = senderPubkey ?? this.pubkey;
+    if (this.signer?.nip44 && targetPubkey) {
+      return await this.signer.nip44.decrypt(targetPubkey, ciphertext);
+    } else if (!senderPubkey && this.conversationKey) {
       return nip44.v2.decrypt(ciphertext, this.conversationKey);
+    } else if (senderPubkey && this.identity) {
+      const conversationKey = nip44.v2.utils.getConversationKey(
+        hexToBytes(this.identity.privkey),
+        senderPubkey
+      );
+      return nip44.v2.decrypt(ciphertext, conversationKey);
     } else {
       throw new Error('No decryption method available');
     }
+  }
+
+  /**
+   * Split plaintext into chunks that fit within NIP-44's 65535-byte limit.
+   * Uses TextEncoder to measure actual UTF-8 byte length.
+   */
+  private splitIntoChunks(plaintext: string): string[] {
+    const encoder = new TextEncoder();
+    const bytes = encoder.encode(plaintext);
+    if (bytes.length <= NIP44_CHUNK_SIZE) {
+      return [plaintext];
+    }
+    const chunks: string[] = [];
+    const decoder = new TextDecoder();
+    let offset = 0;
+    while (offset < bytes.length) {
+      let end = Math.min(offset + NIP44_CHUNK_SIZE, bytes.length);
+      // Avoid splitting in the middle of a multi-byte UTF-8 character
+      while (end > offset && (bytes[end - 1] & 0xC0) === 0x80) {
+        end--;
+      }
+      // Also step back past the leading byte of the split character
+      if (end > offset && end < bytes.length && (bytes[end] & 0xC0) === 0x80) {
+        while (end > offset && (bytes[end] & 0xC0) !== 0xC0) {
+          end--;
+        }
+      }
+      chunks.push(decoder.decode(bytes.slice(offset, end)));
+      offset = end;
+    }
+    return chunks;
+  }
+
+  /**
+   * Encrypt content using NIP-44 with automatic chunking for large payloads.
+   * For NIP-46, uses remote encryption; for local, uses conversation key.
+   *
+   * If the plaintext exceeds NIP-44's 65535-byte limit, it is split into chunks.
+   * Each chunk is encrypted individually. The first chunk contains a JSON header
+   * with metadata, and subsequent chunks contain the payload parts.
+   * The encrypted chunks are joined with a '.' delimiter.
+   */
+  private async encryptContent(plaintext: string): Promise<string> {
+    return this.encryptChunked(plaintext);
+  }
+
+  /**
+   * Decrypt content using NIP-44 with automatic chunk reassembly.
+   * For NIP-46, uses remote decryption; for local, uses conversation key.
+   */
+  private async decryptContent(ciphertext: string): Promise<string> {
+    return this.decryptChunked(ciphertext);
+  }
+
+  /**
+   * Encrypt with chunking support, optionally to a specific recipient pubkey.
+   */
+  private async encryptChunked(plaintext: string, recipientPubkey?: string): Promise<string> {
+    const chunks = this.splitIntoChunks(plaintext);
+    if (chunks.length === 1) {
+      // Small enough for a single NIP-44 encryption
+      return this.encryptSingle(plaintext, recipientPubkey);
+    }
+    // Encrypt each chunk separately
+    const encryptedParts: string[] = [];
+    // First part is a header containing the total chunk count
+    const header = `{"_chunked":true,"total":${chunks.length}}`;
+    encryptedParts.push(await this.encryptSingle(header, recipientPubkey));
+    for (const chunk of chunks) {
+      encryptedParts.push(await this.encryptSingle(chunk, recipientPubkey));
+    }
+    // Join with '.' delimiter (base64 NIP-44 ciphertexts never contain '.')
+    return encryptedParts.join('.');
+  }
+
+  /**
+   * Decrypt with automatic chunk detection and reassembly.
+   */
+  private async decryptChunked(ciphertext: string, senderPubkey?: string): Promise<string> {
+    // Check if this looks like a chunked payload (multiple base64 segments joined by '.')
+    // NIP-44 ciphertexts are base64-encoded and don't contain '.' characters
+    if (!ciphertext.includes('.')) {
+      return this.decryptSingle(ciphertext, senderPubkey);
+    }
+    const parts = ciphertext.split('.');
+    if (parts.length < 2) {
+      return this.decryptSingle(ciphertext, senderPubkey);
+    }
+    // Try to decrypt the first part as a header
+    let header: string;
+    try {
+      header = await this.decryptSingle(parts[0], senderPubkey);
+    } catch {
+      // If the first part doesn't decrypt, this isn't a chunked payload
+      return this.decryptSingle(ciphertext, senderPubkey);
+    }
+    if (!header.startsWith(CHUNKED_PREFIX)) {
+      // Not a chunked payload - the '.' might have been in the ciphertext for another reason
+      // Try decrypting the whole thing as a single value
+      return this.decryptSingle(ciphertext, senderPubkey);
+    }
+    // Parse the header to get the total chunk count
+    const meta = JSON.parse(header) as { _chunked: boolean; total: number };
+    const expectedParts = meta.total;
+    if (parts.length !== expectedParts + 1) {
+      throw new Error(`Chunked payload has ${parts.length - 1} data parts but header says ${expectedParts}`);
+    }
+    // Decrypt each data chunk and reassemble
+    const decryptedChunks: string[] = [];
+    for (let i = 1; i < parts.length; i++) {
+      decryptedChunks.push(await this.decryptSingle(parts[i], senderPubkey));
+    }
+    return decryptedChunks.join('');
   }
 
   /**
@@ -699,40 +833,18 @@ export class SyncEngine {
 
   /**
    * Encrypt content to a recipient's pubkey (for sharing)
+   * Automatically chunks large payloads that exceed NIP-44's limit.
    */
   private async encryptToRecipient(plaintext: string, recipientPubkey: string): Promise<string> {
-    if (this.signer?.nip44) {
-      // Use signer's NIP-44 to encrypt to recipient
-      return await this.signer.nip44.encrypt(recipientPubkey, plaintext);
-    } else if (this.identity) {
-      // Legacy: compute conversation key with recipient and encrypt
-      const conversationKey = nip44.v2.utils.getConversationKey(
-        hexToBytes(this.identity.privkey),
-        recipientPubkey
-      );
-      return nip44.v2.encrypt(plaintext, conversationKey);
-    } else {
-      throw new Error('No encryption method available');
-    }
+    return this.encryptChunked(plaintext, recipientPubkey);
   }
 
   /**
    * Decrypt content from a sender's pubkey (for receiving shared docs)
+   * Automatically reassembles chunked payloads.
    */
   private async decryptFromSender(ciphertext: string, senderPubkey: string): Promise<string> {
-    if (this.signer?.nip44) {
-      // Use signer's NIP-44 to decrypt from sender
-      return await this.signer.nip44.decrypt(senderPubkey, ciphertext);
-    } else if (this.identity) {
-      // Legacy: compute conversation key with sender and decrypt
-      const conversationKey = nip44.v2.utils.getConversationKey(
-        hexToBytes(this.identity.privkey),
-        senderPubkey
-      );
-      return nip44.v2.decrypt(ciphertext, conversationKey);
-    } else {
-      throw new Error('No decryption method available');
-    }
+    return this.decryptChunked(ciphertext, senderPubkey);
   }
 
   /**
