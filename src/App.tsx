@@ -688,7 +688,11 @@ const App: Component = () => {
     const title = params.get('title') || 'Untitled';
     const path = sanitizeFilePath(params.get('path') || 'Clippings');
     const useClipboard = params.has('clipboard');
-    let filename = params.get('filename') || `${sanitizeFilename(title)}.md`;
+    // Sanitize filename from URL params to prevent directory traversal
+    let filename = sanitizeFilename(params.get('filename') || title);
+    if (!filename.endsWith('.md')) {
+      filename = `${filename}.md`;
+    }
     
     let content = '';
     if (useClipboard) {
@@ -711,12 +715,10 @@ const App: Component = () => {
     }
     
     // Ensure the target directory exists
+    // Use Rust backend commands instead of plugin-fs to avoid FS scope restrictions
     const targetDir = `${vault}/${path}`;
     try {
-      const dirExists = await exists(targetDir);
-      if (!dirExists) {
-        await mkdir(targetDir, { recursive: true });
-      }
+      await invoke('create_folder', { path: targetDir, vaultPath: vault });
     } catch (err) {
       console.error('[DeepLink] Failed to create directory:', err);
     }
@@ -724,7 +726,7 @@ const App: Component = () => {
     // Handle duplicate filenames
     let finalPath = `${targetDir}/${filename}`;
     let counter = 1;
-    while (await exists(finalPath)) {
+    while (await invoke<boolean>('file_exists', { path: finalPath })) {
       const baseName = filename.replace(/\.md$/, '');
       finalPath = `${targetDir}/${baseName} ${counter}.md`;
       counter++;
@@ -732,7 +734,7 @@ const App: Component = () => {
     
     // Save the file
     try {
-      await writeTextFile(finalPath, content);
+      await invoke('write_file', { path: finalPath, content, vaultPath: vault });
       console.log('[DeepLink] Clipped to:', finalPath);
       
       // Refresh sidebar to show new file
