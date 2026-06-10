@@ -1,12 +1,14 @@
-import { Component, createSignal, createEffect, onCleanup, onMount, Show } from 'solid-js';
+import { Component, createSignal, createEffect, onCleanup, Show } from 'solid-js';
 import { Network, Options } from 'vis-network';
 import { DataSet } from 'vis-data';
 import { NoteGraph, NoteIndex, buildNoteGraph, buildLocalGraph } from '../lib/editor/note-index';
-import { invoke } from '@tauri-apps/api/core';
+import { platform } from '@platform';
 
 interface GraphViewProps {
   vaultPath: string | null;
   noteIndex: NoteIndex | null;
+  /** Graph already built by App — avoids re-reading the whole vault here. */
+  noteGraph?: NoteGraph | null;
   currentFile: string | null;
   onNodeClick: (path: string) => void;
 }
@@ -25,7 +27,7 @@ const GraphView: Component<GraphViewProps> = (props) => {
 
   // Read file helper
   const readFile = async (path: string): Promise<string> => {
-    return await invoke<string>('read_file', { path, vaultPath: props.vaultPath });
+    return await platform.vault.read(path, props.vaultPath ?? '');
   };
 
   // Build the graph when vault/index changes
@@ -282,19 +284,20 @@ const GraphView: Component<GraphViewProps> = (props) => {
     });
   };
 
-  // Build graph on mount and when vault/index changes
-  onMount(() => {
-    if (props.vaultPath && props.noteIndex) {
-      rebuildGraph();
-    }
-  });
-
-  // Rebuild graph when vault or index changes
+  // Prefer the graph App already computed; only rebuild locally (re-reading the
+  // vault) when it isn't available. Runs on mount, so no separate onMount build.
   createEffect(() => {
-    const vp = props.vaultPath;
-    const ni = props.noteIndex;
-    if (vp && ni) {
+    const shared = props.noteGraph;
+    if (shared) {
+      setGraphData(shared);
+      setNodeCount(shared.nodes.length);
+      setLinkCount(shared.links.length);
+      setLoading(false);
+    } else if (props.vaultPath && props.noteIndex) {
       rebuildGraph();
+    } else {
+      setGraphData(null);
+      setLoading(false);
     }
   });
 

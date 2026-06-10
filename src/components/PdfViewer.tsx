@@ -1,5 +1,5 @@
 import { Component, createSignal, createEffect, onCleanup, Show } from 'solid-js';
-import { invoke } from '@tauri-apps/api/core';
+import { platform } from '@platform';
 
 interface PdfViewerProps {
   path: string;
@@ -47,8 +47,8 @@ const PdfViewer: Component<PdfViewerProps> = (props) => {
 
     (async () => {
       try {
-        // Read binary file from disk via Tauri
-        const data = await invoke<number[]>('read_binary_file', { path: filePath, vaultPath: props.vaultPath });
+        // Read binary file via platform adapter
+        const uint8Array = await platform.vault.readBinary(filePath, props.vaultPath ?? '');
         if (cancelled) return;
 
         // Lazy-load PDF.js
@@ -62,7 +62,6 @@ const PdfViewer: Component<PdfViewerProps> = (props) => {
         ).toString();
 
         // Load the PDF document
-        const uint8Array = new Uint8Array(data);
         const loadingTask = pdfjsLib.getDocument({ data: uint8Array });
         const pdf = await loadingTask.promise;
         if (cancelled) return;

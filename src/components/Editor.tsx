@@ -5,7 +5,7 @@ import { gfm } from '@milkdown/preset-gfm';
 import { nord } from '@milkdown/theme-nord';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
 import { TextSelection } from '@milkdown/prose/state';
-import { invoke } from '@tauri-apps/api/core';
+import { platform } from '@platform';
 // Note: dragDropEnabled is false in tauri.conf.json so HTML5 drag events
 // work on Windows (WebView2 native handler blocks them otherwise).
 // OS file drops come through as standard DOM events on all platforms.
@@ -91,11 +91,7 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
     if (!props.filePath || saving()) return;
     setSaving(true);
     try {
-      await invoke('write_file', {
-        path: props.filePath,
-        content: props.content,
-        vaultPath: props.vaultPath,
-      });
+      await platform.vault.write(props.filePath, props.content, props.vaultPath ?? '');
       console.log('File saved:', props.filePath);
     } catch (err) {
       console.error('Failed to save file:', err);
@@ -280,20 +276,20 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
                 );
                 const attachmentsDir = joinPath(props.vaultPath, 'attachments');
 
-                // Ensure attachments dir exists using Tauri commands
-                const dirExists = await invoke<boolean>('file_exists', { path: attachmentsDir });
+                // Ensure attachments dir exists
+                const dirExists = await platform.vault.exists(attachmentsDir);
                 if (!dirExists) {
-                  await invoke('create_folder', { path: attachmentsDir, vaultPath: props.vaultPath });
+                  await platform.vault.createFolder(attachmentsDir, props.vaultPath);
                 }
 
                 try {
                   const arrayBuffer = await file.arrayBuffer();
                   const destPath = joinPath(attachmentsDir, fileName);
-                  await invoke('write_binary_file', {
-                    path: destPath,
-                    data: Array.from(new Uint8Array(arrayBuffer)),
-                    vaultPath: props.vaultPath,
-                  });
+                  await platform.vault.writeBinary(
+                    destPath,
+                    new Uint8Array(arrayBuffer),
+                    props.vaultPath,
+                  );
 
                   const embedType = currentView.state.schema.nodes.embed;
                   if (embedType) {
@@ -707,7 +703,7 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
               // Load content directly from disk when source view mounts.
               // This completely bypasses Milkdown's serializer.
               if (props.filePath) {
-                invoke<string>('read_file', { path: props.filePath, vaultPath: props.vaultPath }).then((diskContent) => {
+                platform.vault.read(props.filePath, props.vaultPath ?? '').then((diskContent) => {
                   el.value = diskContent;
                   setSourceContent(diskContent);
                 }).catch((err) => {
@@ -734,7 +730,7 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
                 sourceAutoSaveTimeout = window.setTimeout(async () => {
                   if (props.filePath) {
                     try {
-                      await invoke('write_file', { path: props.filePath, content: value, vaultPath: props.vaultPath });
+                      await platform.vault.write(props.filePath, value, props.vaultPath ?? '');
                     } catch (err) {
                       console.error('[SourceEditor] Failed to save:', err);
                     }
@@ -748,7 +744,7 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
                   // Immediate save on Ctrl+S
                   if (sourceAutoSaveTimeout) clearTimeout(sourceAutoSaveTimeout);
                   if (props.filePath) {
-                    invoke('write_file', { path: props.filePath, content: el.value, vaultPath: props.vaultPath }).catch(
+                    platform.vault.write(props.filePath, el.value, props.vaultPath ?? '').catch(
                       (err) => console.error('[SourceEditor] Failed to save:', err)
                     );
                   }

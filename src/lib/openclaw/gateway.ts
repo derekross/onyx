@@ -4,7 +4,7 @@
  * All WS communication goes through Tauri's Rust backend to bypass CSP restrictions.
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { platform } from '@platform';
 
 // --- Types ---
 
@@ -77,12 +77,12 @@ async function gatewayRequest<T>(method: string, params: Record<string, unknown>
   const config = getConfig();
   if (!config) throw new Error('OpenClaw is not configured');
 
-  const result = await invoke<string>('openclaw_gateway_request', {
-    wsUrl: config.wsUrl,
-    token: config.token,
+  const result = await platform.ai.openClawGatewayRequest(
+    config.wsUrl,
+    config.token,
     method,
-    params: JSON.stringify(params),
-  });
+    JSON.stringify(params),
+  );
 
   return JSON.parse(result) as T;
 }

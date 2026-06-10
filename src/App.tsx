@@ -1,14 +1,16 @@
-import { Component, createSignal, createEffect, on, For, Show, onMount, onCleanup } from 'solid-js';
+import { Component, createSignal, createEffect, createResource, on, For, Show, onMount, onCleanup, lazy } from 'solid-js';
 import Sidebar from './components/Sidebar';
 import Editor from './components/Editor';
 import QuickSwitcher from './components/QuickSwitcher';
 import CommandPalette from './components/CommandPalette';
 import SearchPanel from './components/SearchPanel';
-import OpenCodePanel from './components/OpenCodePanel';
+// Lazy-load heavy panels so vis-network, xterm, jszip, and the office/PDF
+// viewers stay out of the startup bundle — they all render behind <Show>.
+const OpenCodePanel = lazy(() => import('./components/OpenCodePanel'));
 import OpenClawChat from './components/OpenClawChat';
 import CustomProviderChat from './components/CustomProviderChat';
-import Settings from './components/Settings';
-import GraphView from './components/GraphView';
+const Settings = lazy(() => import('./components/Settings'));
+const GraphView = lazy(() => import('./components/GraphView'));
 import OutlinePanel from './components/OutlinePanel';
 import BacklinksPanel from './components/BacklinksPanel';
 import PropertiesPanel from './components/PropertiesPanel';
@@ -18,28 +20,24 @@ import SharedDocPreview from './components/SharedDocPreview';
 import SentSharesPanel from './components/SentSharesPanel';
 import FileInfoDialog from './components/FileInfoDialog';
 import PostToNostrDialog from './components/PostToNostrDialog';
-import DocxViewer from './components/DocxViewer';
-import XlsxViewer from './components/XlsxViewer';
-import PdfViewer from './components/PdfViewer';
-import PptxViewer from './components/PptxViewer';
+const DocxViewer = lazy(() => import('./components/DocxViewer'));
+const XlsxViewer = lazy(() => import('./components/XlsxViewer'));
+const PdfViewer = lazy(() => import('./components/PdfViewer'));
+const PptxViewer = lazy(() => import('./components/PptxViewer'));
 import Onboarding, { type OnboardingResult } from './components/Onboarding';
+import UnlockDialog from './components/UnlockDialog';
 import { MobileHeader, MobileNav, MobileDrawer, type MobileNavTab } from './components/mobile';
-import { initPlatform, usePlatformInfo } from './lib/platform';
+import { initPlatform, usePlatformInfo, isWeb } from './lib/platform';
 import { impactLight, impactMedium, notificationSuccess, notificationError } from './lib/haptics';
-import { invoke, convertFileSrc } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { onBackButtonPress } from '@tauri-apps/api/app';
-import { writeTextFile, mkdir, exists } from '@tauri-apps/plugin-fs';
-import { onOpenUrl, getCurrent as getDeepLinkCurrent } from '@tauri-apps/plugin-deep-link';
-import { readText } from '@tauri-apps/plugin-clipboard-manager';
+import { platform } from '@platform';
 import { getSyncEngine, getCurrentLogin, calculateChecksum } from './lib/nostr';
 import { getSignerFromStoredLogin } from './lib/nostr/signer';
 import { sanitizeFilePath } from './lib/security';
-import { buildNoteIndex, resolveWikilink, NoteIndex, FileEntry, NoteGraph, buildNoteGraph } from './lib/editor/note-index';
+import { buildNoteIndex, resolveWikilink, NoteIndex, NoteGraph, buildNoteGraph } from './lib/editor/note-index';
 import { openDailyNote, loadDailyNotesConfig } from './lib/daily-notes';
 import { listTemplates, getTemplateContent, createNoteFromTemplate, loadTemplatesConfig, type TemplateInfo } from './lib/templates';
 import { HeadingInfo } from './lib/editor/heading-plugin';
-import { AssetIndex, AssetEntry, buildAssetIndex } from './lib/editor/asset-index';
+import { AssetIndex, buildAssetIndex } from './lib/editor/asset-index';
 import type { SharedDocument, SentShare, Vault } from './lib/nostr/types';
 
 type FileType = 'markdown' | 'image' | 'pdf' | 'docx' | 'xlsx' | 'pptx';
@@ -62,11 +60,6 @@ interface Tab {
   content: string;
   isDirty: boolean;
   fileType: FileType;
-}
-
-interface AppSettings {
-  vault_path: string | null;
-  show_terminal: boolean;
 }
 
 type SidebarView = 'files' | 'search' | 'bookmarks';
@@ -100,7 +93,7 @@ const App: Component = () => {
   // vault directory, which may be outside the static fs:scope paths.
   createEffect(on(vaultPath, (path: string | null) => {
     if (path) {
-      invoke('set_vault_scope', { vaultPath: path }).catch((err: unknown) => {
+      platform.vault.setVaultScope(path).catch((err: unknown) => {
         console.error('[App] Failed to set vault scope:', err);
       });
     }
@@ -233,6 +226,11 @@ const App: Component = () => {
   // Onboarding state
   const [showOnboarding, setShowOnboarding] = createSignal(false);
 
+  // Web-only: master-passphrase lock state. Tauri builds keep this false.
+  const [webLocked, setWebLocked] = createSignal(
+    platform.info.is_web && !!platform.secrets.isLocked?.(),
+  );
+
   // Templates modal state
   const [showTemplatesModal, setShowTemplatesModal] = createSignal(false);
   const [availableTemplates, setAvailableTemplates] = createSignal<TemplateInfo[]>([]);
@@ -306,7 +304,7 @@ const App: Component = () => {
       
       // Set up Android back button handler using Tauri v2.9+ API
       if (info.platform === 'android') {
-        onBackButtonPress((event) => {
+        platform.app.onBackButton((event) => {
           // Handle back navigation in order of priority:
           // 1. Close settings modal if open
           if (showSettings()) {
@@ -387,49 +385,49 @@ const App: Component = () => {
     });
 
     // Load settings asynchronously
-    invoke<AppSettings>('load_settings').then(async (settings) => {
+    platform.settings.load().then(async (settings) => {
       console.log('[App] Settings loaded:', settings);
-      let vaultToOpen = settings.vault_path;
-      
+      let vaultToOpen = settings.vault_path ?? null;
+
       // On mobile, if no vault is set, auto-initialize to default vault
       if (!vaultToOpen) {
         try {
-          const platformInfo = await invoke<{ platform: string; default_vault_path: string | null }>('get_platform_info');
+          const platformInfo = await platform.refreshInfo();
           console.log('[App] Platform info for auto-init:', platformInfo);
           if ((platformInfo.platform === 'android' || platformInfo.platform === 'ios') && platformInfo.default_vault_path) {
             // Create the directory if it doesn't exist
             console.log('[App] Auto-initializing mobile vault at:', platformInfo.default_vault_path);
-            await invoke('create_folder', { path: platformInfo.default_vault_path, vaultPath: platformInfo.default_vault_path });
+            await platform.vault.createFolder(platformInfo.default_vault_path, platformInfo.default_vault_path);
             vaultToOpen = platformInfo.default_vault_path;
             // Save this as the vault path
-            await invoke('save_settings', { settings: { vault_path: vaultToOpen, show_terminal: false } });
+            await platform.settings.save({ vault_path: vaultToOpen, show_terminal: false });
             console.log('[App] Mobile vault auto-initialized and saved');
           }
         } catch (err) {
           console.error('Failed to auto-initialize mobile vault:', err);
         }
       }
-      
+
       if (vaultToOpen) {
         console.log('[App] Setting vault path to:', vaultToOpen);
         setVaultPath(vaultToOpen);
         // Build note index for wikilink resolution
         try {
-          const files = await invoke<FileEntry[]>('list_files', { path: vaultToOpen });
+          const files = await platform.vault.list(vaultToOpen);
           setNoteIndex(buildNoteIndex(files, vaultToOpen));
         } catch (err) {
           console.error('Failed to build initial note index:', err);
         }
         // Build asset index for embed resolution
         try {
-          const assets = await invoke<AssetEntry[]>('list_assets', { path: vaultToOpen });
+          const assets = await platform.vault.listAssets(vaultToOpen);
           setAssetIndex(buildAssetIndex(assets, vaultToOpen));
         } catch (err) {
           console.error('Failed to build initial asset index:', err);
         }
         // Process any deep links that arrived before vault was ready
         processPendingDeepLinks();
-        
+
         // Restore tabs from session
         if (session?.tabs?.length) {
           const restoredTabs: Tab[] = [];
@@ -437,7 +435,7 @@ const App: Component = () => {
             const fileType = getFileType(savedTab.path);
             if (fileType === 'markdown') {
               try {
-                const content = await invoke<string>('read_file', { path: savedTab.path, vaultPath: vaultPath() });
+                const content = await platform.vault.read(savedTab.path, vaultPath() ?? '');
                 restoredTabs.push({ path: savedTab.path, name: savedTab.name, content, isDirty: false, fileType });
               } catch {
                 // File may have been deleted or moved -- skip it
@@ -445,7 +443,7 @@ const App: Component = () => {
             } else {
               // Non-markdown files don't need content
               try {
-                const exists = await invoke<boolean>('file_exists', { path: savedTab.path });
+                const exists = await platform.vault.exists(savedTab.path);
                 if (exists) {
                   restoredTabs.push({ path: savedTab.path, name: savedTab.name, content: '', isDirty: false, fileType });
                 }
@@ -496,7 +494,7 @@ const App: Component = () => {
     let unlistenFn: (() => void) | null = null;
     let unlistenFileModified: (() => void) | null = null;
 
-    listen('files-changed', () => {
+    platform.vault.onFilesChanged(() => {
       // Debounce refreshes to avoid too many updates
       if (fileChangeDebounce) {
         clearTimeout(fileChangeDebounce);
@@ -508,20 +506,21 @@ const App: Component = () => {
       }, 500);
     }).then(unlisten => {
       unlistenFn = unlisten;
+    }).catch(err => {
+      console.error('[App] Failed to register files-changed watcher:', err);
     });
 
     // Listen for specific file modifications to reload open tabs
-    listen<string[]>('file-modified', async (event) => {
-      const modifiedPaths = event.payload;
+    platform.vault.onFileModified(async (modifiedPaths) => {
       const currentTabs = tabs();
 
       for (const modifiedPath of modifiedPaths) {
         const tabIndex = currentTabs.findIndex(tab => tab.path === modifiedPath);
         if (tabIndex !== -1 && currentTabs[tabIndex].fileType === 'markdown') {
           try {
-            const newContent = await invoke<string>('read_file', { path: modifiedPath, vaultPath: vaultPath() });
+            const newContent = await platform.vault.read(modifiedPath, vaultPath() ?? '');
             const tab = currentTabs[tabIndex];
-            
+
             // If the content is different from what we have, reload it
             // This handles both dirty and non-dirty cases - external changes take precedence
             // (e.g., OpenCode editing a file should always be reflected in the editor)
@@ -531,7 +530,7 @@ const App: Component = () => {
                 clearTimeout(autoSaveTimeout);
                 autoSaveTimeout = null;
               }
-              
+
               // Update tab content and clear dirty flag since we're syncing with disk
               setTabs(prevTabs => prevTabs.map((t, i) =>
                 i === tabIndex ? { ...t, content: newContent, isDirty: false } : t
@@ -544,13 +543,15 @@ const App: Component = () => {
       }
     }).then(unlisten => {
       unlistenFileModified = unlisten;
+    }).catch(err => {
+      console.error('[App] Failed to register file-modified watcher:', err);
     });
 
     // Cleanup must be registered synchronously
     onCleanup(() => {
       unlistenFn?.();
       unlistenFileModified?.();
-      invoke('stop_watching').catch(() => {});
+      platform.vault.stopWatching().catch(() => {});
       if (sharePollingInterval) {
         clearInterval(sharePollingInterval);
       }
@@ -582,28 +583,28 @@ const App: Component = () => {
   const setupDeepLinkHandler = async () => {
     try {
       // Register handler for URLs received while app is running (macOS)
-      await onOpenUrl(async (urls: string[]) => {
+      await platform.deepLink.onOpenUrl(async (urls: string[]) => {
         console.log('[DeepLink] onOpenUrl received:', urls);
         for (const url of urls) {
           await handleDeepLink(url);
         }
       });
-      
+
       // Listen for deep links from single-instance plugin (Linux/Windows)
       // When a second instance tries to launch, the URL is passed via this event
-      await listen<string>('deep-link-received', async (event) => {
-        console.log('[DeepLink] Received from single-instance:', event.payload);
-        await handleDeepLink(event.payload);
+      await platform.deepLink.onReceived(async (url) => {
+        console.log('[DeepLink] Received from single-instance:', url);
+        await handleDeepLink(url);
       });
-      
+
       // Check if app was launched via deep link (important for Linux/Windows)
       // On these platforms, the URL is passed as CLI argument, not via onOpenUrl
-      let launchUrls = await getDeepLinkCurrent();
-      
+      let launchUrls = await platform.deepLink.getCurrent();
+
       // Fallback: check CLI args directly (more reliable on Linux)
       if (!launchUrls || launchUrls.length === 0) {
         try {
-          const cliUrls = await invoke<string[]>('get_deep_link_args');
+          const cliUrls = await platform.deepLink.getLaunchArgs();
           if (cliUrls && cliUrls.length > 0) {
             launchUrls = cliUrls;
           }
@@ -653,7 +654,7 @@ const App: Component = () => {
         let clipboardContent: string | undefined;
         if (params.has('clipboard')) {
           try {
-            clipboardContent = await readText() || undefined;
+            clipboardContent = await platform.clipboard.readText() || undefined;
           } catch (err) {
             console.error('[DeepLink] Failed to read clipboard for queue:', err);
           }
@@ -701,32 +702,32 @@ const App: Component = () => {
         content = cachedClipboard;
       } else {
         try {
-          content = await readText() || '';
+          content = await platform.clipboard.readText() || '';
         } catch (err) {
           console.error('[DeepLink] Failed to read clipboard:', err);
           return;
         }
       }
     }
-    
+
     if (!content) {
       console.error('[DeepLink] No content to clip');
       return;
     }
-    
+
     // Ensure the target directory exists
     // Use Rust backend commands instead of plugin-fs to avoid FS scope restrictions
     const targetDir = `${vault}/${path}`;
     try {
-      await invoke('create_folder', { path: targetDir, vaultPath: vault });
+      await platform.vault.createFolder(targetDir, vault);
     } catch (err) {
       console.error('[DeepLink] Failed to create directory:', err);
     }
-    
+
     // Handle duplicate filenames
     let finalPath = `${targetDir}/${filename}`;
     let counter = 1;
-    while (await invoke<boolean>('file_exists', { path: finalPath })) {
+    while (await platform.vault.exists(finalPath)) {
       const baseName = filename.replace(/\.md$/, '');
       finalPath = `${targetDir}/${baseName} ${counter}.md`;
       counter++;
@@ -734,7 +735,7 @@ const App: Component = () => {
     
     // Save the file
     try {
-      await invoke('write_file', { path: finalPath, content, vaultPath: vault });
+      await platform.vault.write(finalPath, content, vault);
       console.log('[DeepLink] Clipped to:', finalPath);
       
       // Refresh sidebar to show new file
@@ -798,15 +799,15 @@ const App: Component = () => {
       
       // Build note index for the new vault
       try {
-        const files = await invoke<FileEntry[]>('list_files', { path: result.vaultPath });
+        const files = await platform.vault.list(result.vaultPath);
         setNoteIndex(buildNoteIndex(files, result.vaultPath));
       } catch (err) {
         console.error('Failed to build note index after onboarding:', err);
       }
-      
+
       // Build asset index
       try {
-        const assets = await invoke<AssetEntry[]>('list_assets', { path: result.vaultPath });
+        const assets = await platform.vault.listAssets(result.vaultPath);
         setAssetIndex(buildAssetIndex(assets, result.vaultPath));
       } catch (err) {
         console.error('Failed to build asset index after onboarding:', err);
@@ -917,14 +918,14 @@ const App: Component = () => {
       
       // Create Shared directory if it doesn't exist
       const sharedDir = `${vp}/Shared`;
-      const dirExists = await exists(sharedDir);
+      const dirExists = await platform.dialog.pathExists(sharedDir);
       if (!dirExists) {
-        await mkdir(sharedDir, { recursive: true });
+        await platform.dialog.mkdir(sharedDir, true);
       }
-      
+
       // Write file to local filesystem
       const filePath = `${sharedDir}/${filename}`;
-      await writeTextFile(filePath, doc.data.content);
+      await platform.dialog.writeTextFile(filePath, doc.data.content);
       
       // Also sync to Nostr if sync is enabled
       const vault = currentVault();
@@ -1023,9 +1024,9 @@ const App: Component = () => {
   createEffect(() => {
     const path = vaultPath();
     if (path) {
-      invoke('start_watching', { path }).catch(console.error);
+      platform.vault.startWatching(path).catch(console.error);
     } else {
-      invoke('stop_watching').catch(() => {});
+      platform.vault.stopWatching().catch(() => {});
     }
   });
 
@@ -1043,11 +1044,9 @@ const App: Component = () => {
     
     // Save settings (debounced by the effect system)
     console.log('[App] Saving settings - vault_path:', path);
-    invoke('save_settings', {
-      settings: {
-        vault_path: path,
-        show_terminal: terminal,
-      }
+    platform.settings.save({
+      vault_path: path,
+      show_terminal: terminal,
     }).catch(console.error);
   });
 
@@ -1119,7 +1118,7 @@ const App: Component = () => {
 
       // Read all files and cache contents
       const readFile = async (path: string) => {
-        const content = await invoke<string>('read_file', { path, vaultPath: vaultPath() });
+        const content = await platform.vault.read(path, vaultPath() ?? '');
         contents.set(path, content);
         return content;
       };
@@ -1143,6 +1142,17 @@ const App: Component = () => {
     const idx = activeTabIndex();
     return idx >= 0 ? tabs()[idx] : null;
   };
+
+  // Resolve the active image tab's asset URL. resolveAssetUrl is synchronous on
+  // Tauri but returns a Promise on web (blob URL from OPFS), so go through a
+  // resource instead of casting.
+  const [imageTabSrc] = createResource(
+    () => {
+      const tab = currentTab();
+      return tab && tab.fileType === 'image' ? tab.path : null;
+    },
+    (path) => Promise.resolve(platform.assets.resolveAssetUrl(path))
+  );
 
   // Word and character count for status bar
   const wordCount = () => {
@@ -1187,7 +1197,7 @@ const App: Component = () => {
 
     // Load markdown file content
     try {
-      const content = await invoke<string>('read_file', { path, vaultPath: vaultPath() });
+      const content = await platform.vault.read(path, vaultPath() ?? '');
 
       setTabs([...tabs(), { path, name, content, isDirty: false, fileType }]);
       setActiveTabIndex(tabs().length); // Will be the new last index after state updates
@@ -1259,7 +1269,7 @@ const App: Component = () => {
       // they have meaning in raw markdown, but in the WYSIWYG model they are
       // literal (links, emphasis, images are structural nodes).
       const content = tab.content.replace(/\\([[\]_!])/g, '$1');
-      await invoke('write_file', { path: tab.path, content, vaultPath: vaultPath() });
+      await platform.vault.write(tab.path, content, vaultPath() ?? '');
       setTabs(tabs().map((t, i) => i === index ? { ...t, content, isDirty: false } : t));
     } catch (err) {
       console.error('Failed to save:', err);
@@ -1314,7 +1324,7 @@ const App: Component = () => {
         saveCurrentTab();
       } else if (isMod && e.key === '`') {
         e.preventDefault();
-        setShowTerminal(!showTerminal());
+        if (!isWeb()) setShowTerminal(!showTerminal());
       } else if (isMod && e.shiftKey && e.key === 'O') {
         e.preventDefault();
         setShowOutline(!showOutline());
@@ -1373,11 +1383,11 @@ const App: Component = () => {
       
       if (isMobileApp()) {
         // On mobile, use the default vault path
-        const info = await invoke<{ platform: string; default_vault_path: string | null }>('get_platform_info');
+        const info = await platform.refreshInfo();
         console.log('[App] openVault - platform info:', info);
         if (info.default_vault_path) {
           console.log('[App] openVault - creating folder:', info.default_vault_path);
-          await invoke('create_folder', { path: info.default_vault_path, vaultPath: info.default_vault_path });
+          await platform.vault.createFolder(info.default_vault_path, info.default_vault_path);
           setVaultPath(info.default_vault_path);
           localStorage.setItem('vault_path', info.default_vault_path);
           // Refresh sidebar
@@ -1392,8 +1402,7 @@ const App: Component = () => {
         }
       } else {
         // On desktop, use folder picker
-        const { open } = await import('@tauri-apps/plugin-dialog');
-        const selected = await open({
+        const selected = await platform.dialog.open({
           directory: true,
           multiple: false,
           title: 'Select Vault Folder',
@@ -1444,32 +1453,32 @@ const App: Component = () => {
     // Ensure vault directory exists
     try {
       console.log('[App] Ensuring vault folder exists:', vault);
-      await invoke('create_folder', { path: vault, vaultPath: vault });
+      await platform.vault.createFolder(vault, vault);
       console.log('[App] Vault folder created/verified');
     } catch (err) {
       console.error('[App] Failed to ensure vault folder exists:', err);
       // Continue anyway - the folder might already exist
     }
-    
+
     // Generate unique filename
     const timestamp = new Date().toISOString().slice(0, 10);
     let filename = `Untitled ${timestamp}.md`;
     let filepath = `${vault}/${filename}`;
     let counter = 1;
-    
+
     try {
       // Check if file exists and increment counter if needed
       console.log('[App] Checking if file exists:', filepath);
-      while (await invoke<boolean>('file_exists', { path: filepath })) {
+      while (await platform.vault.exists(filepath)) {
         filename = `Untitled ${timestamp} ${counter}.md`;
         filepath = `${vault}/${filename}`;
         counter++;
       }
-      
+
       console.log('[App] Creating note at:', filepath);
-      
+
       // Create the file with some initial content
-      await invoke('create_file', { path: filepath, vaultPath: vault });
+      await platform.vault.createFile(filepath, vault);
       
       console.log('[App] Note created successfully');
       
@@ -1678,14 +1687,14 @@ const App: Component = () => {
     const path = vaultPath();
     if (!path) return;
     try {
-      const files = await invoke<FileEntry[]>('list_files', { path });
+      const files = await platform.vault.list(path);
       setNoteIndex(buildNoteIndex(files, path));
     } catch (err) {
       console.error('Failed to build note index:', err);
     }
     // Also rebuild asset index
     try {
-      const assets = await invoke<AssetEntry[]>('list_assets', { path });
+      const assets = await platform.vault.listAssets(path);
       setAssetIndex(buildAssetIndex(assets, path));
     } catch (err) {
       console.error('Failed to build asset index:', err);
@@ -1746,7 +1755,7 @@ const App: Component = () => {
     } else if (resolved.path) {
       // Create new note (no anchor navigation for new notes)
       try {
-        await invoke('create_file', { path: resolved.path, vaultPath: vaultPath() });
+        await platform.vault.createFile(resolved.path, vaultPath() ?? '');
         await openFile(resolved.path);
         refreshSidebar?.();
       } catch (err) {
@@ -1798,7 +1807,7 @@ const App: Component = () => {
       }
 
       // Get local files with their full paths
-      const entries = await invoke<Array<{ name: string; path: string; isDirectory: boolean; children?: unknown[] }>>('list_files', { path: vaultPath() });
+      const entries = await platform.vault.list(vaultPath() ?? '');
 
       const localFiles: { path: string; fullPath: string; content: string }[] = [];
       const processEntries = async (entries: Array<{ name: string; path: string; isDirectory: boolean; children?: unknown[] }>) => {
@@ -1806,7 +1815,7 @@ const App: Component = () => {
           if (entry.isDirectory && entry.children) {
             await processEntries(entry.children as typeof entries);
           } else if (entry.name.endsWith('.md')) {
-            const content = await invoke<string>('read_file', { path: entry.path, vaultPath: vaultPath() });
+            const content = await platform.vault.read(entry.path, vaultPath() ?? '');
             const relativePath = entry.path.replace(vaultPath()! + '/', '');
             localFiles.push({ path: relativePath, fullPath: entry.path, content });
           }
@@ -1839,7 +1848,7 @@ const App: Component = () => {
           if (remoteFile.data.content !== localFile.content) {
             // Content differs - compare timestamps to decide direction
             try {
-              const localModifiedTime = await invoke<number>('get_file_modified_time', { path: localFile.fullPath });
+              const localModifiedTime = await platform.vault.modifiedTime(localFile.fullPath);
               const remoteModifiedTime = remoteFile.data.modified;
               
               console.log(`[Sync] File ${localFile.path}: local=${localModifiedTime}, remote=${remoteModifiedTime}`);
@@ -1847,7 +1856,7 @@ const App: Component = () => {
               if (remoteModifiedTime > localModifiedTime) {
                 // Remote is newer - download
                 console.log(`[Sync] Downloading newer remote version: ${localFile.path}`);
-                await invoke('write_file', { path: localFile.fullPath, content: remoteFile.data.content, vaultPath: vaultPath() });
+                await platform.vault.write(localFile.fullPath, remoteFile.data.content, vaultPath() ?? '');
                 downloadedCount++;
               } else {
                 // Local is newer or same time - upload
@@ -2051,9 +2060,9 @@ const App: Component = () => {
         const fullPath = `${vaultPath()}/${path}`;
         const parentDir = fullPath.substring(0, fullPath.lastIndexOf('/'));
         if (parentDir !== vaultPath()) {
-          await invoke('create_folder', { path: parentDir, vaultPath: vaultPath() }).catch(() => {});
+          await platform.vault.createFolder(parentDir, vaultPath() ?? '').catch(() => {});
         }
-        await invoke('write_file', { path: fullPath, content: remoteFile.data.content, vaultPath: vaultPath() });
+        await platform.vault.write(fullPath, remoteFile.data.content, vaultPath() ?? '');
         downloadedCount++;
       }
       
@@ -2079,9 +2088,9 @@ const App: Component = () => {
           const tab = currentTabs[i];
           if (tab.fileType !== 'markdown') continue;
           try {
-            const newContent = await invoke<string>('read_file', { path: tab.path, vaultPath: vaultPath() });
+            const newContent = await platform.vault.read(tab.path, vaultPath() ?? '');
             if (newContent !== tab.content) {
-              setTabs(prev => prev.map((t, idx) => 
+              setTabs(prev => prev.map((t, idx) =>
                 idx === i ? { ...t, content: newContent, isDirty: false } : t
               ));
             }
@@ -2118,7 +2127,7 @@ const App: Component = () => {
       console.log('[DailyNotes] Opened daily note:', path, isNew ? '(new)' : '(existing)');
       
       // Open the file in a tab
-      const content = await invoke<string>('read_file', { path, vaultPath: vaultPath() });
+      const content = await platform.vault.read(path, vaultPath() ?? '');
       const name = path.split('/').pop() || 'Daily Note';
       
       // Check if tab already exists
@@ -2176,7 +2185,7 @@ const App: Component = () => {
       );
       
       // Open the new note
-      const content = await invoke<string>('read_file', { path: notePath, vaultPath: vaultPath() });
+      const content = await platform.vault.read(notePath, vaultPath() ?? '');
       const name = notePath.split('/').pop() || noteName;
       
       setTabs([...tabs(), { path: notePath, name, content, isDirty: false, fileType: 'markdown' }]);
@@ -2209,7 +2218,7 @@ const App: Component = () => {
     { id: 'save', name: 'Save', shortcut: 'Ctrl+S', action: saveCurrentTab },
     { id: 'quick-switcher', name: 'Quick Switcher', shortcut: 'Ctrl+O', action: () => setShowQuickSwitcher(true) },
     { id: 'search', name: 'Search in Files', shortcut: 'Ctrl+Shift+F', action: () => setShowSearch(true) },
-    { id: 'toggle-terminal', name: 'Toggle Terminal', shortcut: 'Ctrl+`', action: () => setShowTerminal(!showTerminal()) },
+    { id: 'toggle-terminal', name: 'Toggle Terminal', shortcut: 'Ctrl+`', action: () => { if (!isWeb()) setShowTerminal(!showTerminal()); } },
     { id: 'toggle-outline', name: 'Toggle Outline', shortcut: 'Ctrl+Shift+O', action: () => setShowOutline(!showOutline()) },
     { id: 'toggle-backlinks', name: 'Toggle Backlinks', shortcut: 'Ctrl+Shift+B', action: () => setShowBacklinks(!showBacklinks()) },
     { id: 'toggle-properties', name: 'Toggle Properties', shortcut: 'Ctrl+Shift+P', action: () => setShowProperties(!showProperties()) },
@@ -2556,7 +2565,7 @@ const App: Component = () => {
         </button>
         <div class="icon-bar-spacer"></div>
         {/* OpenClaw button - Hidden on mobile, only shown when enabled */}
-        <Show when={!isMobileApp() && openClawEnabled()}>
+        <Show when={!isMobileApp() && !isWeb() && openClawEnabled()}>
           <button
             class={`icon-btn openclaw-icon ${showOpenClaw() ? 'active' : ''}`}
             onClick={() => {
@@ -2577,7 +2586,7 @@ const App: Component = () => {
           </button>
         </Show>
         {/* Custom Provider button - Hidden on mobile, only shown when enabled */}
-        <Show when={!isMobileApp() && customProviderEnabled()}>
+        <Show when={!isMobileApp() && !isWeb() && customProviderEnabled()}>
           <button
             class={`icon-btn custom-provider-icon ${showCustomProvider() ? 'active' : ''}`}
             onClick={() => {
@@ -2599,7 +2608,7 @@ const App: Component = () => {
           </button>
         </Show>
         {/* OpenCode button - Hidden on mobile, only shown when enabled */}
-        <Show when={!isMobileApp() && openCodeEnabled()}>
+        <Show when={!isMobileApp() && !isWeb() && openCodeEnabled()}>
           <button
             class={`icon-btn opencode-icon ${showTerminal() ? 'active' : ''}`}
             onClick={() => setShowTerminal(!showTerminal())}
@@ -2749,7 +2758,7 @@ const App: Component = () => {
                     // Rebuild asset index after files are uploaded
                     if (vaultPath()) {
                       try {
-                        const assets = await invoke<AssetEntry[]>('list_assets', { path: vaultPath() });
+                        const assets = await platform.vault.listAssets(vaultPath()!);
                         setAssetIndex(buildAssetIndex(assets, vaultPath()!));
                       } catch (err) {
                         console.error('Failed to rebuild asset index after upload:', err);
@@ -2761,6 +2770,7 @@ const App: Component = () => {
                 <GraphView
                   vaultPath={vaultPath()}
                   noteIndex={noteIndex()}
+                  noteGraph={noteGraph()}
                   currentFile={currentTab()?.path || null}
                   onNodeClick={(path) => { setShowGraphView(false); openFile(path); }}
                 />
@@ -2771,7 +2781,7 @@ const App: Component = () => {
                 <Show when={currentTab()?.fileType === 'image'}>
                   <div class="image-viewer">
                     <img
-                      src={convertFileSrc(currentTab()!.path)}
+                      src={imageTabSrc() ?? ''}
                       alt={currentTab()!.name}
                       draggable={false}
                     />
@@ -2830,17 +2840,17 @@ const App: Component = () => {
                 onLinkMention={async (sourcePath) => {
                   // Refresh the file contents for the modified file
                   try {
-                    const newContent = await invoke<string>('read_file', { path: sourcePath, vaultPath: vaultPath() });
+                    const newContent = await platform.vault.read(sourcePath, vaultPath() ?? '');
                     const newContents = new Map(fileContents());
                     newContents.set(sourcePath, newContent);
                     setFileContents(newContents);
-                    
+
                     // Rebuild the graph with updated content
                     const index = noteIndex();
                     const vault = vaultPath();
                     if (index && vault) {
                       const graph = await buildNoteGraph(vault, index, async (path: string) => {
-                        return newContents.get(path) || await invoke<string>('read_file', { path, vaultPath: vaultPath() });
+                        return newContents.get(path) || await platform.vault.read(path, vaultPath() ?? '');
                       });
                       setNoteGraph(graph);
                     }
@@ -2895,7 +2905,7 @@ const App: Component = () => {
           </Show>
 
           {/* OpenClaw Panel - Right Side (Desktop only) */}
-          <Show when={showOpenClaw() && !isMobileApp()}>
+          <Show when={showOpenClaw() && !isMobileApp() && !isWeb()}>
             <div
               class="resize-handle"
               onMouseDown={(e: MouseEvent) => {
@@ -2936,7 +2946,7 @@ const App: Component = () => {
           </Show>
 
           {/* Custom Provider Panel - Right Side (Desktop only) */}
-          <Show when={showCustomProvider() && !isMobileApp()}>
+          <Show when={showCustomProvider() && !isMobileApp() && !isWeb()}>
             <div
               class="resize-handle"
               onMouseDown={(e: MouseEvent) => {
@@ -2977,7 +2987,7 @@ const App: Component = () => {
           </Show>
 
           {/* OpenCode Panel - Right Side (Desktop only) */}
-          <Show when={showTerminal() && !isMobileApp()}>
+          <Show when={showTerminal() && !isMobileApp() && !isWeb()}>
             <div
               class="resize-handle"
               onMouseDown={handleTerminalResizeStart}
@@ -3063,7 +3073,7 @@ const App: Component = () => {
                     const tab = tabs()[idx];
                     if (tab?.path) {
                       try {
-                        const diskContent = await invoke<string>('read_file', { path: tab.path, vaultPath: vaultPath() });
+                        const diskContent = await platform.vault.read(tab.path, vaultPath() ?? '');
                         setTabs(tabs().map((t, i) => i === idx ? { ...t, content: diskContent, isDirty: false } : t));
                       } catch (err) {
                         console.error('Failed to reload content on mode switch:', err);
@@ -3098,8 +3108,13 @@ const App: Component = () => {
 
       {/* Modals */}
       
+      {/* Web-only: prompt for master passphrase before any secrets are touched */}
+      <Show when={webLocked()}>
+        <UnlockDialog onUnlocked={() => setWebLocked(false)} />
+      </Show>
+
       {/* Onboarding Wizard - shown on first run */}
-      <Show when={showOnboarding()}>
+      <Show when={showOnboarding() && !webLocked()}>
         <Onboarding
           isMobile={isMobileApp()}
           onComplete={handleOnboardingComplete}
@@ -3354,7 +3369,7 @@ const App: Component = () => {
             
             // Read the file content
             const filePath = showFileInfo()!;
-            const content = await invoke<string>('read_file', { path: filePath, vaultPath: vaultPath() });
+            const content = await platform.vault.read(filePath, vaultPath() ?? '');
             const relativePath = filePath.replace(vaultPath()! + '/', '');
             
             // Publish the file

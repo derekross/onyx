@@ -331,39 +331,55 @@ export async function buildNoteGraph(
     });
   }
 
-  // Process each note to extract links
-  for (const sourcePath of noteIndex.allPaths) {
-    try {
-      const content = await readFile(sourcePath);
-      const linkTargets = extractLinksFromContent(content);
-
-      // Update outgoing count
-      const sourceNode = nodes.get(sourcePath);
-      if (sourceNode) {
-        sourceNode.outgoingCount = linkTargets.length;
-      }
-
-      // Resolve each link and create edges
-      for (const target of linkTargets) {
-        const resolved = resolveWikilink(target, sourcePath, noteIndex, vaultPath);
-
-        const link: NoteLink = {
-          from: sourcePath,
-          to: resolved.path || target,
-          toRaw: target,
-          exists: resolved.exists,
-        };
-        links.push(link);
-
-        // Track incoming links
-        if (resolved.exists && resolved.path) {
-          const currentCount = incomingCounts.get(resolved.path) || 0;
-          incomingCounts.set(resolved.path, currentCount + 1);
+  // Read all note contents with bounded concurrency — serial one-at-a-time
+  // IPC reads are the dominant cost on large vaults.
+  const contents = new Map<string, string>();
+  const paths = [...noteIndex.allPaths];
+  const CONCURRENCY = 16;
+  let nextIndex = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, paths.length) }, async () => {
+      while (nextIndex < paths.length) {
+        const path = paths[nextIndex++];
+        try {
+          contents.set(path, await readFile(path));
+        } catch (err) {
+          // Skip files that can't be read
+          console.warn(`Could not read file for graph: ${path}`, err);
         }
       }
-    } catch (err) {
-      // Skip files that can't be read
-      console.warn(`Could not read file for graph: ${sourcePath}`, err);
+    })
+  );
+
+  // Process each note to extract links
+  for (const sourcePath of paths) {
+    const content = contents.get(sourcePath);
+    if (content === undefined) continue;
+    const linkTargets = extractLinksFromContent(content);
+
+    // Update outgoing count
+    const sourceNode = nodes.get(sourcePath);
+    if (sourceNode) {
+      sourceNode.outgoingCount = linkTargets.length;
+    }
+
+    // Resolve each link and create edges
+    for (const target of linkTargets) {
+      const resolved = resolveWikilink(target, sourcePath, noteIndex, vaultPath);
+
+      const link: NoteLink = {
+        from: sourcePath,
+        to: resolved.path || target,
+        toRaw: target,
+        exists: resolved.exists,
+      };
+      links.push(link);
+
+      // Track incoming links
+      if (resolved.exists && resolved.path) {
+        const currentCount = incomingCounts.get(resolved.path) || 0;
+        incomingCounts.set(resolved.path, currentCount + 1);
+      }
     }
   }
 

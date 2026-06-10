@@ -1,12 +1,6 @@
 import { Component, createSignal, createEffect, For, onMount } from 'solid-js';
-import { invoke } from '@tauri-apps/api/core';
-
-interface FileEntry {
-  name: string;
-  path: string;
-  isDirectory: boolean;
-  children?: FileEntry[];
-}
+import { platform } from '@platform';
+import type { FileEntry } from '@platform';
 
 interface QuickSwitcherProps {
   vaultPath: string | null;
@@ -36,9 +30,10 @@ const QuickSwitcher: Component<QuickSwitcherProps> = (props) => {
   onMount(async () => {
     if (props.vaultPath) {
       try {
-        const entries = await invoke<FileEntry[]>('list_files', { path: props.vaultPath });
-        setFiles(flattenFiles(entries));
-        setFiltered(flattenFiles(entries));
+        const entries = await platform.vault.list(props.vaultPath);
+        const flattened = flattenFiles(entries);
+        setFiles(flattened);
+        setFiltered(flattened);
       } catch (err) {
         console.error('Failed to load files:', err);
       }

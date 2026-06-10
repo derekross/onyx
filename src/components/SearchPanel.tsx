@@ -1,11 +1,6 @@
 import { Component, createSignal, For, onMount } from 'solid-js';
-import { invoke } from '@tauri-apps/api/core';
-
-interface SearchResult {
-  path: string;
-  name: string;
-  matches: { line: number; content: string }[];
-}
+import { platform } from '@platform';
+import type { SearchResult } from '@platform';
 
 interface SearchPanelProps {
   vaultPath: string | null;
@@ -32,10 +27,7 @@ const SearchPanel: Component<SearchPanelProps> = (props) => {
 
     setIsSearching(true);
     try {
-      const searchResults = await invoke<SearchResult[]>('search_files', {
-        path: props.vaultPath,
-        query: searchQuery,
-      });
+      const searchResults = await platform.search.searchVault(props.vaultPath, searchQuery);
       setResults(searchResults);
     } catch (err) {
       console.error('Search failed:', err);

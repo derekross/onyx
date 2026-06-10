@@ -7,7 +7,7 @@
  */
 
 import { $prose, $nodeSchema, $view, $inputRule } from '@milkdown/utils';
-import { sanitizeUrl } from '../security';
+import { escapeHtml, escapeHtmlAttr, sanitizeUrl, unescapeHtml } from '../security';
 import { Plugin, PluginKey } from '@milkdown/prose/state';
 import { InputRule } from '@milkdown/prose/inputrules';
 import type { NodeViewConstructor } from '@milkdown/prose/view';
@@ -18,8 +18,7 @@ import {
   resolveAsset,
 } from './asset-index';
 import { NoteIndex, resolveWikilink } from './note-index';
-import { convertFileSrc } from '@tauri-apps/api/core';
-import { invoke } from '@tauri-apps/api/core';
+import { platform } from '@platform';
 
 // Plugin key
 export const embedPluginKey = new PluginKey('embed');
@@ -152,13 +151,30 @@ export const embedInputRule = $inputRule(() => {
 // Node View Rendering
 // ============================================================================
 
-function getMediaSrc(resolvedPath: string): string {
-  return convertFileSrc(resolvedPath);
+/**
+ * Resolve the asset URL for a local file path and assign it to a media
+ * element. The Tauri adapter resolves synchronously to an asset:// URL,
+ * while the web adapter returns a Promise<string> (Blob URL) — normalize
+ * both through Promise.resolve.
+ */
+function setMediaSrc(
+  el: HTMLImageElement | HTMLAudioElement | HTMLVideoElement,
+  resolvedPath: string
+): void {
+  Promise.resolve(platform.assets.resolveAssetUrl(resolvedPath)).then(
+    (url) => {
+      el.src = url;
+    },
+    () => {
+      // Trigger the element's error handler so broken-embed UI renders
+      el.dispatchEvent(new Event('error'));
+    }
+  );
 }
 
 function renderImage(container: HTMLElement, resolvedPath: string, width: number | null, height: number | null): void {
   const img = document.createElement('img');
-  img.src = getMediaSrc(resolvedPath);
+  setMediaSrc(img, resolvedPath);
   img.alt = resolvedPath.split('/').pop() || 'embedded image';
   img.className = 'embed-image';
   if (width) img.style.width = `${width}px`;
@@ -172,7 +188,7 @@ function renderImage(container: HTMLElement, resolvedPath: string, width: number
 
 function renderAudio(container: HTMLElement, resolvedPath: string): void {
   const audio = document.createElement('audio');
-  audio.src = getMediaSrc(resolvedPath);
+  setMediaSrc(audio, resolvedPath);
   audio.controls = true;
   audio.className = 'embed-audio';
   audio.preload = 'metadata';
@@ -185,7 +201,7 @@ function renderAudio(container: HTMLElement, resolvedPath: string): void {
 
 function renderVideo(container: HTMLElement, resolvedPath: string, width: number | null, height: number | null): void {
   const video = document.createElement('video');
-  video.src = getMediaSrc(resolvedPath);
+  setMediaSrc(video, resolvedPath);
   video.controls = true;
   video.className = 'embed-video';
   video.preload = 'metadata';
@@ -218,10 +234,7 @@ async function renderPdf(container: HTMLElement, resolvedPath: string, anchor: s
   container.appendChild(wrapper);
 
   try {
-    const data = await invoke<number[]>('read_binary_file', {
-      path: resolvedPath,
-      vaultPath: currentVaultPath,
-    });
+    const uint8Array = await platform.vault.readBinary(resolvedPath, currentVaultPath ?? '');
 
     const pdfjsLib = await import('pdfjs-dist');
     pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -229,7 +242,6 @@ async function renderPdf(container: HTMLElement, resolvedPath: string, anchor: s
       import.meta.url
     ).toString();
 
-    const uint8Array = new Uint8Array(data);
     const pdf = await pdfjsLib.getDocument({ data: uint8Array }).promise;
 
     const startPage = pageNumber || 1;
@@ -272,7 +284,7 @@ async function renderNote(container: HTMLElement, target: string, anchor: string
   container.appendChild(loading);
 
   try {
-    const content = await invoke<string>('read_file', { path: resolved.path, vaultPath: currentVaultPath });
+    const content = await platform.vault.read(resolved.path, currentVaultPath ?? '');
     container.innerHTML = '';
 
     let displayContent = content;
@@ -329,10 +341,8 @@ function extractAnchoredContent(content: string, anchor: string): string {
 }
 
 function simpleMarkdownToHtml(markdown: string): string {
-  return '<p>' + markdown
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+  // Escape HTML first (incl. quotes, so attribute injection is impossible)
+  return '<p>' + escapeHtml(markdown)
     .replace(/^### (.+)$/gm, '<h3>$1</h3>')
     .replace(/^## (.+)$/gm, '<h2>$1</h2>')
     .replace(/^# (.+)$/gm, '<h1>$1</h1>')
@@ -340,8 +350,10 @@ function simpleMarkdownToHtml(markdown: string): string {
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
+    // The captured url was HTML-escaped above; decode it back to the raw
+    // URL, sanitize, then attribute-encode for safe interpolation into href.
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m: string, text: string, url: string) => {
-      const safeUrl = sanitizeUrl(url);
+      const safeUrl = escapeHtmlAttr(sanitizeUrl(unescapeHtml(url)));
       return `<a href="${safeUrl}">${text}</a>`;
     })
     .replace(/\n\n/g, '</p><p>')

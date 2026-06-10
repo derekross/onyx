@@ -6,7 +6,7 @@
  * 2. Full skills.sh ecosystem (browse library)
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { platform } from '@platform';
 
 // Skills.sh API types
 export interface SkillsShSkill {
@@ -65,8 +65,8 @@ export async function fetchSkillsShLeaderboard(forceRefresh = false): Promise<Sk
   }
 
   try {
-    // Use Tauri backend to bypass CORS
-    const responseText = await invoke<string>('fetch_skills_sh');
+    // Use platform adapter (Tauri backend on native, fetch on web) to bypass CORS
+    const responseText = await platform.skills.fetchSkillsSh();
     const data: SkillsShResponse = JSON.parse(responseText);
     
     // Update cache
@@ -159,15 +159,11 @@ export async function installSkillFromSkillsSh(skill: SkillsShSkill): Promise<vo
   const skillUrl = getSkillFileUrl(skill.topSource, skill.id, 'SKILL.md');
   
   try {
-    // Download SKILL.md using Tauri backend to bypass CORS
-    const content = await invoke<string>('fetch_skill_file', { url: skillUrl });
-    
-    // Save the skill file using Tauri backend
-    await invoke('skill_save_file', {
-      skillId: skill.id,
-      fileName: 'SKILL.md',
-      content,
-    });
+    // Download SKILL.md (CORS-bypassed on native)
+    const content = await platform.skills.fetchSkillFile(skillUrl);
+
+    // Save the skill file
+    await platform.skills.saveFile(skill.id, 'SKILL.md', content);
   } catch (err) {
     console.error(`Failed to install skill ${skill.id}:`, err);
     throw err;
@@ -179,7 +175,7 @@ export async function installSkillFromSkillsSh(skill: SkillsShSkill): Promise<vo
  */
 export async function isSkillInstalled(skillId: string): Promise<boolean> {
   try {
-    return await invoke<boolean>('skill_is_installed', { skillId });
+    return await platform.skills.isInstalled(skillId);
   } catch {
     return false;
   }
@@ -189,21 +185,21 @@ export async function isSkillInstalled(skillId: string): Promise<boolean> {
  * Delete an installed skill
  */
 export async function deleteSkill(skillId: string): Promise<void> {
-  await invoke('skill_delete', { skillId });
+  await platform.skills.remove(skillId);
 }
 
 /**
  * Get list of all installed skill IDs
  */
 export async function getInstalledSkillIds(): Promise<string[]> {
-  return await invoke<string[]>('skill_list_installed');
+  return await platform.skills.listInstalled();
 }
 
 /**
  * Read a skill file content
  */
 export async function readSkillFile(skillId: string, fileName: string): Promise<string> {
-  return await invoke<string>('skill_read_file', { skillId, fileName });
+  return await platform.skills.readFile(skillId, fileName);
 }
 
 /**

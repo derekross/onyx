@@ -10,9 +10,7 @@
  */
 
 import { Component, createSignal, createEffect, Show, For, onMount } from 'solid-js';
-import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
-import { listen } from '@tauri-apps/api/event';
+import { platform } from '@platform';
 import { generateNewLogin, importNsecLogin, saveLogin } from '../lib/nostr/login';
 import type { NostrIdentity } from '../lib/nostr/types';
 import '../styles/onboarding.css';
@@ -138,7 +136,7 @@ const Onboarding: Component<OnboardingProps> = (props) => {
   // Load default vault path on mount
   onMount(async () => {
     try {
-      const info = await invoke<{ default_vault_path: string | null }>('get_platform_info');
+      const info = await platform.refreshInfo();
       if (info.default_vault_path) {
         setDefaultVaultPath(info.default_vault_path);
       }
@@ -170,11 +168,11 @@ const Onboarding: Component<OnboardingProps> = (props) => {
       if (!path) throw new Error('Could not determine vault path');
       
       // Create the folder
-      await invoke('create_folder', { path, vaultPath: path });
+      await platform.vault.createFolder(path, path);
       setVaultPath(path);
-      
+
       // Save to settings
-      await invoke('save_settings', { settings: { vault_path: path } });
+      await platform.settings.save({ vault_path: path });
       localStorage.setItem('vault_path', path);
       
       goNext();
@@ -190,15 +188,15 @@ const Onboarding: Component<OnboardingProps> = (props) => {
     setVaultLoading(true);
     setVaultError(null);
     try {
-      const selected = await open({
+      const selected = await platform.dialog.open({
         directory: true,
         multiple: false,
         title: 'Choose your notes folder',
       });
-      
+
       if (selected && typeof selected === 'string') {
         setVaultPath(selected);
-        await invoke('save_settings', { settings: { vault_path: selected } });
+        await platform.settings.save({ vault_path: selected });
         localStorage.setItem('vault_path', selected);
         goNext();
       }
@@ -212,8 +210,8 @@ const Onboarding: Component<OnboardingProps> = (props) => {
 
   const getHomeDir = async (): Promise<string> => {
     try {
-      const info = await invoke<{ home_dir: string }>('get_platform_info');
-      return info.home_dir || '';
+      const info = await platform.refreshInfo();
+      return info.default_vault_path ?? '';
     } catch {
       return '';
     }
@@ -304,7 +302,7 @@ const Onboarding: Component<OnboardingProps> = (props) => {
     setOpenCodeStatus('checking');
     try {
       const path = await withTimeout(
-        invoke<string | null>('check_opencode_installed'),
+        platform.opencode.isInstalled(),
         10000, // 10 second timeout
         'Timed out checking for OpenCode'
       );
@@ -325,35 +323,36 @@ const Onboarding: Component<OnboardingProps> = (props) => {
     setOpenCodeError(null);
     setInstallProgress({ stage: 'checking', progress: 0, message: 'Preparing installation...' });
 
-    // Listen for install progress events
-    const unlisten = await listen<InstallProgress>('opencode-install-progress', (event) => {
-      setInstallProgress(event.payload);
-      if (event.payload.stage === 'complete') {
-        setOpenCodeInstalled(true);
-        setOpenCodeStatus('installed');
-      } else if (event.payload.stage === 'error') {
-        setOpenCodeError(event.payload.message);
-        setOpenCodeStatus('error');
-      }
-    });
-
+    let installCompleted = false;
     // Set a timeout to prevent hanging forever (5 minutes max for installation)
     const timeoutId = setTimeout(() => {
       console.error('OpenCode installation timed out');
       setOpenCodeError('Installation timed out. You can try again later in Settings.');
       setOpenCodeStatus('error');
-      unlisten();
     }, 5 * 60 * 1000);
 
     try {
-      await invoke('install_opencode');
+      await platform.opencode.install((payload) => {
+        setInstallProgress(payload as InstallProgress);
+        if (payload.stage === 'complete') {
+          installCompleted = true;
+          setOpenCodeInstalled(true);
+          setOpenCodeStatus('installed');
+        } else if (payload.stage === 'error') {
+          setOpenCodeError(payload.message);
+          setOpenCodeStatus('error');
+        }
+      });
+      if (!installCompleted) {
+        setOpenCodeInstalled(true);
+        setOpenCodeStatus('installed');
+      }
     } catch (err) {
       console.error('Failed to install OpenCode:', err);
       setOpenCodeError(err instanceof Error ? err.message : 'Installation failed');
       setOpenCodeStatus('error');
     } finally {
       clearTimeout(timeoutId);
-      unlisten();
     }
   };
 
@@ -445,7 +444,7 @@ const Onboarding: Component<OnboardingProps> = (props) => {
             if (!response.ok) throw new Error(`Failed to download ${file}`);
             const content = await response.text();
             await withTimeout(
-              invoke('skill_save_file', { skillId, fileName: file, content }),
+              platform.skills.saveFile(skillId, file, content),
               10000,
               `Timed out saving ${file}`
             );

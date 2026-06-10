@@ -1,5 +1,5 @@
 import { Component, createSignal, createEffect, onCleanup, For, Show } from 'solid-js';
-import { invoke } from '@tauri-apps/api/core';
+import { platform } from '@platform';
 import JSZip from 'jszip';
 
 interface PptxViewerProps {
@@ -185,10 +185,10 @@ const PptxViewer: Component<PptxViewerProps> = (props) => {
 
     (async () => {
       try {
-        const data = await invoke<number[]>('read_binary_file', { path: filePath, vaultPath: props.vaultPath });
+        const data = await platform.vault.readBinary(filePath, props.vaultPath ?? '');
         if (cancelled) return;
 
-        const zip = await JSZip.loadAsync(new Uint8Array(data));
+        const zip = await JSZip.loadAsync(data);
 
         // Get slide dimensions from presentation.xml
         let slideW = 12192000; // default 10" widescreen

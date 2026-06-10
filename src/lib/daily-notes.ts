@@ -4,7 +4,7 @@
  * Creates and opens daily notes based on user-configured format and folder.
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { platform } from '@platform';
 import dayjs from 'dayjs';
 
 export interface DailyNotesConfig {
@@ -82,23 +82,23 @@ export async function openDailyNote(
   
   // Check if the note already exists
   try {
-    await invoke<string>('read_file', { path: notePath, vaultPath });
+    await platform.vault.read(notePath, vaultPath);
     return { path: notePath, isNew: false };
   } catch {
     // Note doesn't exist, create it
   }
-  
+
   // Ensure the folder exists
   try {
-    await invoke('create_folder', { path: folderPath, vaultPath });
+    await platform.vault.createFolder(folderPath, vaultPath);
   } catch {
     // Folder may already exist, that's fine
   }
-  
+
   // Create the note with the template content
   const content = interpolateTemplate(config.template);
-  await invoke('create_file', { path: notePath, vaultPath });
-  await invoke('write_file', { path: notePath, content, vaultPath });
+  await platform.vault.createFile(notePath, vaultPath);
+  await platform.vault.write(notePath, content, vaultPath);
   
   return { path: notePath, isNew: true };
 }
@@ -113,7 +113,7 @@ export async function listDailyNotes(
   const folderPath = `${vaultPath}/${config.folder}`;
   
   try {
-    const files = await invoke<Array<{ name: string; path: string; isDirectory: boolean }>>('list_files', { path: folderPath });
+    const files = await platform.vault.list(folderPath);
     return files
       .filter(f => !f.isDirectory && f.name.endsWith('.md'))
       .map(f => f.path)

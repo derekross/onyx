@@ -1,10 +1,11 @@
 import { Component, createSignal, onMount, onCleanup, Show } from 'solid-js';
 import { Terminal } from '@xterm/xterm';
+import '@xterm/xterm/css/xterm.css';
 import { FitAddon } from '@xterm/addon-fit';
 import { CanvasAddon } from '@xterm/addon-canvas';
-import { invoke } from '@tauri-apps/api/core';
-import { listen, UnlistenFn } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-shell';
+import { platform } from '@platform';
+
+type UnlistenFn = () => void;
 
 interface OpenCodeTerminalProps {
   vaultPath: string | null;
@@ -68,7 +69,7 @@ const OpenCodeTerminal: Component<OpenCodeTerminalProps> = (props) => {
     terminal.onData((data) => {
       const sid = sessionId();
       if (sid) {
-        invoke('write_pty', { sessionId: sid, data }).catch(console.error);
+        platform.opencode.writePty(sid, data).catch(console.error);
       }
     });
 
@@ -76,7 +77,7 @@ const OpenCodeTerminal: Component<OpenCodeTerminalProps> = (props) => {
     terminal.onResize(({ cols, rows }) => {
       const sid = sessionId();
       if (sid) {
-        invoke('resize_pty', { sessionId: sid, cols, rows }).catch(console.error);
+        platform.opencode.resizePty(sid, cols, rows).catch(console.error);
       }
     });
 
@@ -105,7 +106,7 @@ const OpenCodeTerminal: Component<OpenCodeTerminalProps> = (props) => {
 
     try {
       // Spawn opencode in PTY
-      const sid = await invoke<string>('spawn_pty', {
+      const sid = await platform.opencode.spawnPty({
         command: openCodeCommand,
         cwd: props.vaultPath || undefined,
         cols,
@@ -116,14 +117,14 @@ const OpenCodeTerminal: Component<OpenCodeTerminalProps> = (props) => {
       setIsConnected(true);
 
       // Listen for output events
-      outputUnlisten = await listen<string>(`pty-output-${sid}`, (event) => {
+      outputUnlisten = await platform.opencode.onPtyOutput(sid, (chunk) => {
         if (terminal) {
-          terminal.write(event.payload);
+          terminal.write(chunk);
         }
       });
 
       // Listen for exit events
-      exitUnlisten = await listen(`pty-exit-${sid}`, () => {
+      exitUnlisten = await platform.opencode.onPtyExit(sid, () => {
         setIsConnected(false);
         if (terminal) {
           terminal.write('\r\n\x1b[33m[Process exited. Press any key to restart...]\x1b[0m\r\n');
@@ -156,7 +157,7 @@ const OpenCodeTerminal: Component<OpenCodeTerminalProps> = (props) => {
         exitUnlisten();
         exitUnlisten = null;
       }
-      await invoke('kill_pty', { sessionId: oldSid }).catch(() => {});
+      await platform.opencode.killPty(oldSid).catch(() => {});
       setSessionId(null);
     }
 
@@ -193,7 +194,7 @@ const OpenCodeTerminal: Component<OpenCodeTerminalProps> = (props) => {
     // Cleanup PTY session
     const sid = sessionId();
     if (sid) {
-      await invoke('kill_pty', { sessionId: sid }).catch(() => {});
+      await platform.opencode.killPty(sid).catch(() => {});
     }
 
     // Cleanup resize observer
@@ -225,7 +226,7 @@ const OpenCodeTerminal: Component<OpenCodeTerminalProps> = (props) => {
           <p>OpenCode is an AI coding assistant that helps you write and edit code directly in your vault.</p>
           <button
             class="opencode-install-btn"
-            onClick={() => open('https://opencode.ai/download')}
+            onClick={() => platform.shell.openExternal('https://opencode.ai/download')}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>

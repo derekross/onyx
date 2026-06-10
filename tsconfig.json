@@ -15,7 +15,12 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "@platform": ["src/platform/index.ts"],
+      "@platform/*": ["src/platform/*"]
+    }
   },
   "include": ["src"]
 }

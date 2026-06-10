@@ -1,5 +1,6 @@
 import { Component, createSignal, createEffect, onCleanup } from 'solid-js';
-import { invoke } from '@tauri-apps/api/core';
+import { platform } from '@platform';
+import { sanitizeHtml } from '../lib/security';
 
 interface DocxViewerProps {
   path: string;
@@ -23,8 +24,8 @@ const DocxViewer: Component<DocxViewerProps> = (props) => {
 
     (async () => {
       try {
-        // Read binary file from disk via Tauri
-        const data = await invoke<number[]>('read_binary_file', { path: filePath, vaultPath: props.vaultPath });
+        // Read binary file via platform adapter
+        const data = await platform.vault.readBinary(filePath, props.vaultPath ?? '');
         if (cancelled) return;
 
         // Lazy-load mammoth
@@ -32,7 +33,7 @@ const DocxViewer: Component<DocxViewerProps> = (props) => {
         if (cancelled) return;
 
         // Convert DOCX to HTML
-        const arrayBuffer = new Uint8Array(data).buffer;
+        const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
         const result = await mammoth.convertToHtml(
           { arrayBuffer },
           {
@@ -46,7 +47,9 @@ const DocxViewer: Component<DocxViewerProps> = (props) => {
         );
         if (cancelled) return;
 
-        setHtml(result.value);
+        // Sanitize converter output before rendering via innerHTML — a
+        // malicious .docx could otherwise inject scripts/javascript: links.
+        setHtml(sanitizeHtml(result.value));
         setLoading(false);
       } catch (err) {
         if (cancelled) return;

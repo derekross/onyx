@@ -1,6 +1,6 @@
 import { Component, createSignal, createEffect, For, Show, onMount, onCleanup } from 'solid-js';
-import { open } from '@tauri-apps/plugin-dialog';
-import { invoke } from '@tauri-apps/api/core';
+import { platform } from '@platform';
+import type { FileEntry } from '@platform';
 import { isMobile } from '../lib/platform';
 
 /**
@@ -19,13 +19,6 @@ function getParentPath(filePath: string): string {
  */
 function getFileName(filePath: string): string {
   return filePath.replace(/\\/g, '/').split('/').pop() || '';
-}
-
-interface FileEntry {
-  name: string;
-  path: string;
-  isDirectory: boolean;
-  children?: FileEntry[];
 }
 
 type SidebarView = 'files' | 'search' | 'bookmarks';
@@ -132,22 +125,21 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
   const openVault = async () => {
     try {
-      // Check platform first
-      const platformInfo = await invoke<{ platform: string; default_vault_path: string | null }>('get_platform_info');
+      const info = await platform.refreshInfo();
 
-      if (platformInfo.platform === 'android' || platformInfo.platform === 'ios') {
+      if (info.platform === 'android' || info.platform === 'ios') {
         // On mobile, use default vault path (folder picker not supported)
-        if (platformInfo.default_vault_path) {
+        if (info.default_vault_path) {
           // Create the directory if it doesn't exist
-          await invoke('create_folder', { path: platformInfo.default_vault_path, vaultPath: platformInfo.default_vault_path });
-          props.onVaultOpen(platformInfo.default_vault_path);
-          await loadFiles(platformInfo.default_vault_path);
+          await platform.vault.createFolder(info.default_vault_path, info.default_vault_path);
+          props.onVaultOpen(info.default_vault_path);
+          await loadFiles(info.default_vault_path);
         } else {
           console.error('Could not determine default vault path');
         }
       } else {
         // On desktop, use folder picker
-        const selected = await open({
+        const selected = await platform.dialog.open({
           directory: true,
           multiple: false,
           title: 'Select Vault Folder',
@@ -165,7 +157,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
   const loadFiles = async (path: string) => {
     try {
-      const entries = await invoke<FileEntry[]>('list_files', { path });
+      const entries = await platform.vault.list(path);
       setFiles(entries);
     } catch (err) {
       console.error('Failed to load files:', err);
@@ -282,10 +274,10 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
     try {
       if (creating.type === 'file') {
-        await invoke('create_file', { path: fullPath, vaultPath: props.vaultPath });
+        await platform.vault.createFile(fullPath, props.vaultPath ?? '');
         props.onFileCreated(fullPath);
       } else {
-        await invoke('create_folder', { path: fullPath, vaultPath: props.vaultPath });
+        await platform.vault.createFolder(fullPath, props.vaultPath ?? '');
       }
       await refreshFiles();
     } catch (err) {
@@ -319,7 +311,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
     const newPath = `${parentPath}${sep}${newName}`;
 
     try {
-      await invoke('rename_file', { oldPath, newPath, vaultPath: props.vaultPath });
+      await platform.vault.rename(oldPath, newPath, props.vaultPath ?? '');
       props.onFileMoved?.(oldPath, newPath);
       await refreshFiles();
       if (props.currentFile === oldPath) {
@@ -344,7 +336,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
     if (!item) return;
 
     try {
-      await invoke('delete_file', { path: item.path, vaultPath: props.vaultPath });
+      await platform.vault.remove(item.path, props.vaultPath ?? '');
       props.onFileDeleted(item.path);
       await refreshFiles();
     } catch (err) {
@@ -363,7 +355,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
     const destPath = `${parentPath}${copySep}${copyName}`;
 
     try {
-      await invoke('copy_file', { source: path, dest: destPath, vaultPath: props.vaultPath });
+      await platform.vault.copy(path, destPath, props.vaultPath ?? '');
       await refreshFiles();
     } catch (err) {
       console.error('Failed to copy:', err);
@@ -382,7 +374,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
   const handleOpenInDefaultApp = async (path: string) => {
     try {
-      await invoke('open_in_default_app', { path });
+      await platform.shell.openInDefaultApp(path);
     } catch (err) {
       console.error('Failed to open in default app:', err);
     }
@@ -391,7 +383,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
   const handleShowInFolder = async (path: string) => {
     try {
-      await invoke('show_in_folder', { path });
+      await platform.shell.showInFolder(path);
     } catch (err) {
       console.error('Failed to show in folder:', err);
     }
@@ -400,7 +392,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
   const handleMoveTo = async (sourcePath: string) => {
     try {
-      const selected = await open({
+      const selected = await platform.dialog.open({
         directory: true,
         multiple: false,
         title: 'Move to...',
@@ -422,7 +414,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
     if (!move) return;
 
     try {
-      await invoke('rename_file', { oldPath: move.sourcePath, newPath: move.destPath, vaultPath: props.vaultPath });
+      await platform.vault.rename(move.sourcePath, move.destPath, props.vaultPath ?? '');
       props.onFileMoved?.(move.sourcePath, move.destPath);
       await refreshFiles();
 
@@ -556,10 +548,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
     setIsSearching(true);
     try {
-      const results = await invoke<SearchResult[]>('search_files', {
-        path: props.vaultPath,
-        query: query.trim(),
-      });
+      const results = await platform.search.searchVault(props.vaultPath, query.trim());
       setSearchResults(results);
     } catch (err) {
       console.error('Search failed:', err);
@@ -1101,7 +1090,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
                   const path = contextMenu()!.path;
                   closeContextMenu();
                   try {
-                    const content = await invoke<string>('read_file', { path, vaultPath: props.vaultPath });
+                    const content = await platform.vault.read(path, props.vaultPath ?? '');
                     props.onShareFile?.(path, content);
                   } catch (err) {
                     console.error('Failed to read file for sharing:', err);
@@ -1119,7 +1108,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
                   const path = contextMenu()!.path;
                   closeContextMenu();
                   try {
-                    const content = await invoke<string>('read_file', { path, vaultPath: props.vaultPath });
+                    const content = await platform.vault.read(path, props.vaultPath ?? '');
                     const fileName = path.replace(/\\/g, '/').split('/').pop() || '';
                     const title = fileName.replace(/\.md$/, '');
                     props.onPostToNostr?.(path, content, title);

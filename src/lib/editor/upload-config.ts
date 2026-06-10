@@ -1,8 +1,7 @@
 import { $prose } from '@milkdown/utils';
 import { Plugin, PluginKey } from '@milkdown/prose/state';
 import type { EditorView } from '@milkdown/prose/view';
-import { invoke } from '@tauri-apps/api/core';
-import { readImage } from '@tauri-apps/plugin-clipboard-manager';
+import { platform } from '@platform';
 import { isWindows } from '../../lib/platform';
 
 // Module-level state
@@ -92,11 +91,11 @@ async function saveFileToVault(file: File, vaultPath: string): Promise<string> {
   const attachmentsDir = joinPath(vaultPath, 'attachments');
 
   // Ensure attachments directory exists
-  // Uses Tauri commands which validate path is within vault (not subject to plugin-fs scope)
-  const dirExists = await invoke<boolean>('file_exists', { path: attachmentsDir });
+  // Path validation happens inside the adapter (vault scope on Tauri, OPFS on web)
+  const dirExists = await platform.vault.exists(attachmentsDir);
   if (!dirExists) {
     console.log('[Upload] Creating attachments directory:', attachmentsDir);
-    await invoke('create_folder', { path: attachmentsDir, vaultPath });
+    await platform.vault.createFolder(attachmentsDir, vaultPath);
   }
 
   fileName = await getUniqueFileName(attachmentsDir, fileName);
@@ -110,19 +109,14 @@ async function saveFileToVault(file: File, vaultPath: string): Promise<string> {
   try {
     const arrayBuffer = await file.arrayBuffer();
     console.log('[Upload] Read', arrayBuffer.byteLength, 'bytes from file');
-    
+
     // Security: Validate file content matches claimed MIME type
     if (!validateFileMagicBytes(arrayBuffer, file.type)) {
       console.error('[Upload] File content does not match claimed MIME type:', file.type);
       throw new Error('File content does not match the expected type. The file may be corrupted or mislabeled.');
     }
 
-    // Uses Tauri write_binary_file command which validates path is within vault
-    await invoke('write_binary_file', {
-      path: fullPath,
-      data: Array.from(new Uint8Array(arrayBuffer)),
-      vaultPath,
-    });
+    await platform.vault.writeBinary(fullPath, new Uint8Array(arrayBuffer), vaultPath);
     console.log('[Upload] File written successfully');
 
     return relativePath;
@@ -148,10 +142,10 @@ async function copyFileToVault(sourcePath: string, vaultPath: string): Promise<s
   const attachmentsDir = joinPath(vaultPath, 'attachments');
 
   // Ensure attachments directory exists
-  const dirExists = await invoke<boolean>('file_exists', { path: attachmentsDir });
+  const dirExists = await platform.vault.exists(attachmentsDir);
   if (!dirExists) {
     console.log('[Upload] Creating attachments directory:', attachmentsDir);
-    await invoke('create_folder', { path: attachmentsDir, vaultPath });
+    await platform.vault.createFolder(attachmentsDir, vaultPath);
   }
 
   fileName = await getUniqueFileName(attachmentsDir, fileName);
@@ -162,11 +156,11 @@ async function copyFileToVault(sourcePath: string, vaultPath: string): Promise<s
   console.log('[Upload] Copying to fullPath:', fullPath);
 
   try {
-    // Read source file and write to destination using Tauri commands
-    const data = await invoke<number[]>('read_binary_file', { path: sourcePath, vaultPath });
+    // Read source file and write to destination through the adapter
+    const data = await platform.vault.readBinary(sourcePath, vaultPath);
     console.log('[Upload] Read', data.length, 'bytes from source');
 
-    await invoke('write_binary_file', { path: fullPath, data, vaultPath });
+    await platform.vault.writeBinary(fullPath, data, vaultPath);
     console.log('[Upload] File copied successfully');
 
     return relativePath;
@@ -371,10 +365,13 @@ export const vaultUploadPlugin = $prose(() => {
 
           (async () => {
             try {
-              console.log('[Upload] Trying Tauri clipboard readImage fallback...');
-              const clipImage = await readImage();
-              const rgba = await clipImage.rgba();
-              const { width, height } = await clipImage.size();
+              console.log('[Upload] Trying platform clipboard readImage fallback...');
+              const clipImage = await platform.clipboard.readImage();
+              if (!clipImage) {
+                console.log('[Upload] No image on clipboard');
+                return;
+              }
+              const { rgba, width, height } = clipImage;
 
               if (rgba.length > 0 && width > 0 && height > 0) {
                 // Convert RGBA to PNG using an offscreen canvas
@@ -421,7 +418,7 @@ async function getUniqueFileName(directory: string, fileName: string): Promise<s
   let candidate = fileName;
   let counter = 1;
 
-  while (await invoke<boolean>('file_exists', { path: joinPath(directory, candidate) })) {
+  while (await platform.vault.exists(joinPath(directory, candidate))) {
     candidate = `${nameWithoutExt}-${counter}.${ext}`;
     counter++;
   }

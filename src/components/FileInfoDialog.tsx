@@ -1,5 +1,5 @@
 import { Component, Show, createSignal, onMount, For } from 'solid-js';
-import { invoke } from '@tauri-apps/api/core';
+import { platform } from '@platform';
 import type { SentShare } from '../lib/nostr/types';
 
 interface LocalFileInfo {
@@ -52,11 +52,7 @@ const FileInfoDialog: Component<FileInfoDialogProps> = (props) => {
   onMount(async () => {
     // Fetch local file info
     try {
-      const stats = await invoke<{
-        size: number;
-        created: number;
-        modified: number;
-      }>('get_file_stats', { path: props.filePath });
+      const stats = await platform.vault.stats(props.filePath);
       
       const name = props.filePath.replace(/\\/g, '/').split('/').pop() || '';
       const extension = name.includes('.') ? name.split('.').pop() || '' : '';

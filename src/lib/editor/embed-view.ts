@@ -6,7 +6,7 @@
  */
 
 import { $view } from '@milkdown/utils';
-import { sanitizeUrl } from '../security';
+import { escapeHtml, escapeHtmlAttr, sanitizeUrl, unescapeHtml } from '../security';
 import type { NodeViewConstructor } from '@milkdown/prose/view';
 import { embedSchema } from './embed-schema';
 import {
@@ -16,8 +16,7 @@ import {
   resolveAsset,
 } from './asset-index';
 import { NoteIndex, resolveWikilink } from './note-index';
-import { convertFileSrc } from '@tauri-apps/api/core';
-import { invoke } from '@tauri-apps/api/core';
+import { platform } from '@platform';
 
 // Module-level state (same pattern as wikilink-plugin.ts)
 let currentAssetIndex: AssetIndex | null = null;
@@ -42,10 +41,24 @@ export const setEmbedCurrentFilePath = (path: string | null) => {
 };
 
 /**
- * Get the asset:// URL for a local file path
+ * Resolve the asset URL for a local file path and assign it to a media
+ * element. The Tauri adapter resolves synchronously to an asset:// URL,
+ * while the web adapter returns a Promise<string> (Blob URL) — normalize
+ * both through Promise.resolve.
  */
-function getMediaSrc(resolvedPath: string): string {
-  return convertFileSrc(resolvedPath);
+function setMediaSrc(
+  el: HTMLImageElement | HTMLAudioElement | HTMLVideoElement,
+  resolvedPath: string
+): void {
+  Promise.resolve(platform.assets.resolveAssetUrl(resolvedPath)).then(
+    (url) => {
+      el.src = url;
+    },
+    () => {
+      // Trigger the element's error handler so broken-embed UI renders
+      el.dispatchEvent(new Event('error'));
+    }
+  );
 }
 
 /**
@@ -58,7 +71,7 @@ function renderImage(
   height: number | null
 ): void {
   const img = document.createElement('img');
-  img.src = getMediaSrc(resolvedPath);
+  setMediaSrc(img, resolvedPath);
   img.alt = resolvedPath.split('/').pop() || 'embedded image';
   img.className = 'embed-image';
 
@@ -82,7 +95,7 @@ function renderImage(
  */
 function renderAudio(container: HTMLElement, resolvedPath: string): void {
   const audio = document.createElement('audio');
-  audio.src = getMediaSrc(resolvedPath);
+  setMediaSrc(audio, resolvedPath);
   audio.controls = true;
   audio.className = 'embed-audio';
   audio.preload = 'metadata';
@@ -105,7 +118,7 @@ function renderVideo(
   height: number | null
 ): void {
   const video = document.createElement('video');
-  video.src = getMediaSrc(resolvedPath);
+  setMediaSrc(video, resolvedPath);
   video.controls = true;
   video.className = 'embed-video';
   video.preload = 'metadata';
@@ -159,11 +172,8 @@ async function renderPdf(
   container.appendChild(wrapper);
 
   try {
-    // Read file via Tauri
-    const data = await invoke<number[]>('read_binary_file', {
-      path: resolvedPath,
-      vaultPath: currentVaultPath,
-    });
+    // Read file via the platform vault
+    const uint8Array = await platform.vault.readBinary(resolvedPath, currentVaultPath ?? '');
 
     // Lazy-load PDF.js
     const pdfjsLib = await import('pdfjs-dist');
@@ -172,7 +182,6 @@ async function renderPdf(
       import.meta.url
     ).toString();
 
-    const uint8Array = new Uint8Array(data);
     const pdf = await pdfjsLib.getDocument({ data: uint8Array }).promise;
 
     // Render specific page or all pages
@@ -232,7 +241,7 @@ async function renderNote(
 
   try {
     // Read the note content
-    const content = await invoke<string>('read_file', { path: resolved.path, vaultPath: currentVaultPath });
+    const content = await platform.vault.read(resolved.path, currentVaultPath ?? '');
 
     container.innerHTML = '';
 
@@ -323,11 +332,8 @@ function escapeRegex(str: string): string {
  * Very basic markdown to HTML conversion for note transclusion display
  */
 function simpleMarkdownToHtml(markdown: string): string {
-  let html = markdown
-    // Escape HTML
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+  // Escape HTML first (incl. quotes, so attribute injection is impossible)
+  let html = escapeHtml(markdown)
     // Headers
     .replace(/^### (.+)$/gm, '<h3>$1</h3>')
     .replace(/^## (.+)$/gm, '<h2>$1</h2>')
@@ -338,9 +344,10 @@ function simpleMarkdownToHtml(markdown: string): string {
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     // Code
     .replace(/`([^`]+)`/g, '<code>$1</code>')
-    // Links (but not wikilinks)
+    // Links (but not wikilinks). The captured url was HTML-escaped above;
+    // decode it back to the raw URL, sanitize, then attribute-encode.
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m: string, text: string, url: string) => {
-      const safeUrl = sanitizeUrl(url);
+      const safeUrl = escapeHtmlAttr(sanitizeUrl(unescapeHtml(url)));
       return `<a href="${safeUrl}">${text}</a>`;
     })
     // Line breaks

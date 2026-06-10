@@ -1,5 +1,5 @@
 import { Component, createSignal, createEffect, onCleanup, For, Show } from 'solid-js';
-import { invoke } from '@tauri-apps/api/core';
+import { platform } from '@platform';
 
 interface XlsxViewerProps {
   path: string;
@@ -31,8 +31,8 @@ const XlsxViewer: Component<XlsxViewerProps> = (props) => {
 
     (async () => {
       try {
-        // Read binary file from disk via Tauri
-        const data = await invoke<number[]>('read_binary_file', { path: filePath, vaultPath: props.vaultPath });
+        // Read binary file via platform adapter
+        const arrayBuffer = await platform.vault.readBinary(filePath, props.vaultPath ?? '');
         if (cancelled) return;
 
         // Lazy-load xlsx and HyperFormula
@@ -43,7 +43,6 @@ const XlsxViewer: Component<XlsxViewerProps> = (props) => {
         if (cancelled) return;
 
         // Parse workbook with formulas preserved
-        const arrayBuffer = new Uint8Array(data);
         const workbook = XLSX.read(arrayBuffer, { type: 'array', cellFormula: true, sheetStubs: true });
 
         // Build sheet data for HyperFormula: array of arrays per sheet

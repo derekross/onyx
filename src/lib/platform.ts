@@ -1,126 +1,104 @@
 /**
  * Platform Detection Utility
- * 
- * Provides centralized platform detection for conditional UI rendering.
- * Caches the result from Tauri's get_platform_info() command.
+ *
+ * Public API for platform detection. Internally delegates to the platform
+ * adapter (@platform) so the same helpers work for Tauri Desktop, Tauri
+ * Android, and the future Web/PWA build.
  */
 
-import { invoke } from '@tauri-apps/api/core';
 import { createSignal } from 'solid-js';
+import { platform } from '@platform';
+import type { PlatformInfo as AdapterPlatformInfo, PlatformName } from '@platform';
 
+// Re-exported shape kept compatible with existing call sites that destructure
+// `{ platform, default_vault_path }`.
 export interface PlatformInfo {
-  platform: 'android' | 'ios' | 'macos' | 'windows' | 'linux';
+  platform: PlatformName;
   default_vault_path: string;
+  is_web?: boolean;
 }
 
-// Cached platform info
-let cachedPlatformInfo: PlatformInfo | null = null;
-let platformPromise: Promise<PlatformInfo> | null = null;
-
-// Reactive signal for components to use
 const [platformInfo, setPlatformInfo] = createSignal<PlatformInfo | null>(null);
+let cached: PlatformInfo | null = null;
+let inflight: Promise<PlatformInfo> | null = null;
 
-/**
- * Initialize platform detection - call this once at app startup
- */
+function toLocal(info: AdapterPlatformInfo): PlatformInfo {
+  return {
+    platform: info.platform,
+    default_vault_path: info.default_vault_path ?? '',
+    is_web: info.is_web,
+  };
+}
+
 export async function initPlatform(): Promise<PlatformInfo> {
-  if (cachedPlatformInfo) {
-    return cachedPlatformInfo;
-  }
+  if (cached) return cached;
+  if (inflight) return inflight;
 
-  if (platformPromise) {
-    return platformPromise;
-  }
-
-  platformPromise = invoke<PlatformInfo>('get_platform_info')
+  inflight = platform
+    .refreshInfo()
     .then((info) => {
-      cachedPlatformInfo = info;
-      setPlatformInfo(info);
-      console.log('[Platform] Detected:', info.platform);
-      return info;
+      const local = toLocal(info);
+      cached = local;
+      setPlatformInfo(local);
+      console.log('[Platform] Detected:', local.platform);
+      return local;
     })
     .catch((err) => {
       console.error('[Platform] Failed to detect platform:', err);
-      // Fallback to a reasonable default
       const fallback: PlatformInfo = {
         platform: 'linux',
         default_vault_path: '',
       };
-      cachedPlatformInfo = fallback;
+      cached = fallback;
       setPlatformInfo(fallback);
       return fallback;
     });
 
-  return platformPromise;
+  return inflight;
 }
 
-/**
- * Get platform info synchronously (returns null if not yet initialized)
- */
 export function getPlatformInfo(): PlatformInfo | null {
   return platformInfo();
 }
 
-/**
- * Get platform info as a reactive signal
- */
 export function usePlatformInfo() {
   return platformInfo;
 }
 
-/**
- * Check if running on Android
- */
 export function isAndroid(): boolean {
-  return cachedPlatformInfo?.platform === 'android';
+  return cached?.platform === 'android';
 }
 
-/**
- * Check if running on iOS
- */
 export function isIOS(): boolean {
-  return cachedPlatformInfo?.platform === 'ios';
+  return cached?.platform === 'ios';
 }
 
-/**
- * Check if running on a mobile platform (Android or iOS)
- */
+export function isWeb(): boolean {
+  return cached?.platform === 'web' || cached?.is_web === true;
+}
+
 export function isMobile(): boolean {
-  const platform = cachedPlatformInfo?.platform;
-  return platform === 'android' || platform === 'ios';
+  const p = cached?.platform;
+  return p === 'android' || p === 'ios';
 }
 
-/**
- * Check if running on a desktop platform (macOS, Windows, Linux)
- */
 export function isDesktop(): boolean {
-  return !isMobile();
+  const p = cached?.platform;
+  return p === 'macos' || p === 'windows' || p === 'linux';
 }
 
-/**
- * Check if running on macOS
- */
 export function isMacOS(): boolean {
-  return cachedPlatformInfo?.platform === 'macos';
+  return cached?.platform === 'macos';
 }
 
-/**
- * Check if running on Windows
- */
 export function isWindows(): boolean {
-  return cachedPlatformInfo?.platform === 'windows';
+  return cached?.platform === 'windows';
 }
 
-/**
- * Check if running on Linux
- */
 export function isLinux(): boolean {
-  return cachedPlatformInfo?.platform === 'linux';
+  return cached?.platform === 'linux';
 }
 
-/**
- * Get the platform name
- */
 export function getPlatformName(): string {
-  return cachedPlatformInfo?.platform || 'unknown';
+  return cached?.platform || 'unknown';
 }

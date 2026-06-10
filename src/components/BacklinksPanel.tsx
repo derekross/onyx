@@ -1,5 +1,5 @@
 import { Component, For, Show, createSignal, createMemo } from 'solid-js';
-import { invoke } from '@tauri-apps/api/core';
+import { platform } from '@platform';
 import { NoteGraph } from '../lib/editor/note-index';
 import { BacklinksData, getBacklinksForNote, BacklinkInfo } from '../lib/editor/backlinks';
 
@@ -61,7 +61,7 @@ const BacklinksPanel: Component<BacklinksPanelProps> = (props) => {
     
     try {
       // Read the source file
-      const content = await invoke<string>('read_file', { path: backlink.sourcePath, vaultPath: props.vaultPath });
+      const content = await platform.vault.read(backlink.sourcePath, props.vaultPath ?? '');
       const lines = content.split('\n');
       const lineIndex = backlink.lineNumber - 1;
       
@@ -83,7 +83,7 @@ const BacklinksPanel: Component<BacklinksPanelProps> = (props) => {
           
           // Write the file back
           const newContent = lines.join('\n');
-          await invoke('write_file', { path: backlink.sourcePath, content: newContent, vaultPath: props.vaultPath });
+          await platform.vault.write(backlink.sourcePath, newContent, props.vaultPath ?? '');
           
           // Update fileContents to reflect the change (will trigger re-render)
           if (props.onLinkMention) {

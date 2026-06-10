@@ -9,9 +9,9 @@
  */
 
 import { Component, createSignal, createEffect, onMount, onCleanup, For, Show } from 'solid-js';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { sanitizeUrl } from '../lib/security';
+import { platform } from '@platform';
+import type { FileEntry } from '@platform';
+import { escapeHtml, escapeHtmlAttr, sanitizeUrl, unescapeHtml } from '../lib/security';
 
 // --- Types ---
 
@@ -119,10 +119,8 @@ function parseActions(text: string): { actions: FileAction[]; cleanText: string 
 // --- Markdown rendering ---
 
 function markdownToHtml(markdown: string): string {
-  let html = markdown
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  // Escape HTML first (incl. quotes, so attribute injection is impossible)
+  let html = escapeHtml(markdown);
 
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => {
     const langClass = lang ? ` class="language-${lang}"` : '';
@@ -137,8 +135,10 @@ function markdownToHtml(markdown: string): string {
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
 
+  // The captured url was HTML-escaped above; decode it back to the raw URL,
+  // sanitize, then attribute-encode for safe interpolation into href.
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, text, url) => {
-    const safeUrl = sanitizeUrl(url);
+    const safeUrl = escapeHtmlAttr(sanitizeUrl(unescapeHtml(url)));
     return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${text}</a>`;
   });
 
@@ -221,7 +221,9 @@ const OpenClawChat: Component<OpenClawChatProps> = (props) => {
 
   const scrollToBottom = () => {
     requestAnimationFrame(() => {
-      messagesEndRef?.scrollIntoView({ behavior: 'smooth' });
+      // 'auto' (instant): this runs on every SSE delta during streaming,
+      // and smooth scrolling churns on rapid updates.
+      messagesEndRef?.scrollIntoView({ behavior: 'auto' });
     });
   };
 
@@ -276,7 +278,7 @@ const OpenClawChat: Component<OpenClawChatProps> = (props) => {
       switch (action.action) {
         case 'read_file': {
           if (!action.path) throw new Error('No path specified');
-          const content = await invoke<string>('read_file', { path: action.path, vaultPath });
+          const content = await platform.vault.read(action.path, vaultPath ?? '');
           const truncated = content.length > 100000
             ? content.slice(0, 100000) + '\n\n[...truncated at 100k chars]'
             : content;
@@ -286,31 +288,31 @@ const OpenClawChat: Component<OpenClawChatProps> = (props) => {
         case 'write_file': {
           if (!action.path) throw new Error('No path specified');
           if (action.content === undefined) throw new Error('No content specified');
-          await invoke('write_file', { path: action.path, content: action.content, vaultPath });
+          await platform.vault.write(action.path, action.content, vaultPath ?? '');
           return { action, success: true, result: `Wrote ${action.content.length} characters to ${action.path}` };
         }
 
         case 'edit_file': {
           if (!action.path) throw new Error('No path specified');
           if (!action.old_text || action.new_text === undefined) throw new Error('old_text and new_text required');
-          const current = await invoke<string>('read_file', { path: action.path, vaultPath });
+          const current = await platform.vault.read(action.path, vaultPath ?? '');
           if (!current.includes(action.old_text)) {
             // Return the actual file content so the model can see what's there and retry
             const preview = current.length > 5000 ? current.slice(0, 5000) + '\n[...truncated]' : current;
             return { action, success: false, result: `Could not find the specified old_text in ${action.path}. Here is the current file content so you can retry with the exact text:\n\n${preview}` };
           }
           const updated = current.replace(action.old_text, action.new_text);
-          await invoke('write_file', { path: action.path, content: updated, vaultPath });
+          await platform.vault.write(action.path, updated, vaultPath ?? '');
           return { action, success: true, result: `Edited ${action.path}` };
         }
 
         case 'list_files': {
           if (!vaultPath) throw new Error('No vault is open');
-          const files = await invoke<Array<{ name: string; path: string; is_dir: boolean; children?: any[] }>>('list_files', { path: vaultPath });
-          const formatTree = (entries: Array<{ name: string; is_dir: boolean; children?: any[] }>, indent: string = ''): string => {
+          const files = await platform.vault.list(vaultPath);
+          const formatTree = (entries: FileEntry[], indent: string = ''): string => {
             return entries.map(e => {
-              const line = `${indent}${e.name}${e.is_dir ? '/' : ''}`;
-              if (e.is_dir && e.children?.length) {
+              const line = `${indent}${e.name}${e.isDirectory ? '/' : ''}`;
+              if (e.isDirectory && e.children?.length) {
                 return line + '\n' + formatTree(e.children, indent + '  ');
               }
               return line;
@@ -323,7 +325,7 @@ const OpenClawChat: Component<OpenClawChatProps> = (props) => {
         case 'search_files': {
           if (!vaultPath) throw new Error('No vault is open');
           if (!action.query) throw new Error('No query specified');
-          const results = await invoke<Array<{ path: string; name: string; matches: Array<{ line: number; content: string }> }>>('search_files', { path: vaultPath, query: action.query });
+          const results = await platform.search.searchVault(vaultPath, action.query);
           if (results.length === 0) return { action, success: true, result: `No matches found for "${action.query}"` };
           const formatted = results.map(r => {
             const matchLines = r.matches.map(m => `  Line ${m.line}: ${m.content}`).join('\n');
@@ -445,9 +447,7 @@ const OpenClawChat: Component<OpenClawChatProps> = (props) => {
     return new Promise<string>((resolve, reject) => {
       let resolved = false;
 
-      listen<string>(`openclaw-stream-${requestId}`, (event) => {
-        const data = event.payload;
-
+      platform.ai.onOpenClawChunk(requestId, (data) => {
         if (data === '__DONE__') {
           resolved = true;
           resolve(accumulated);
@@ -493,12 +493,7 @@ const OpenClawChat: Component<OpenClawChatProps> = (props) => {
           streamCleanup = null;
         };
 
-        invoke('openclaw_stream', {
-          requestId,
-          url: fullUrl,
-          token,
-          body,
-        }).catch((err) => {
+        platform.ai.openClawStream(requestId, fullUrl, token, body).catch((err) => {
           if (!resolved) {
             resolved = true;
             reject(err);
@@ -572,7 +567,7 @@ const OpenClawChat: Component<OpenClawChatProps> = (props) => {
       const fileContexts: string[] = [];
       for (const f of filesToMention) {
         try {
-          const content = await invoke<string>('read_file', { path: f.path, vaultPath: props.vaultPath });
+          const content = await platform.vault.read(f.path, props.vaultPath ?? '');
           const truncated = content.length > 50000 ? content.slice(0, 50000) + '\n[...truncated]' : content;
           fileContexts.push(`=== File: ${f.path} ===\n${truncated}`);
         } catch (err) {

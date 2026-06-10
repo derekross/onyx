@@ -1,9 +1,5 @@
 import { Component, createSignal, For, Show, onMount, onCleanup, createEffect } from 'solid-js';
-import { invoke } from '@tauri-apps/api/core';
-import { getVersion } from '@tauri-apps/api/app';
-import { open } from '@tauri-apps/plugin-shell';
-import { open as openDialog } from '@tauri-apps/plugin-dialog';
-import { readTextFile } from '@tauri-apps/plugin-fs';
+import { platform } from '@platform';
 import {
   getSyncEngine,
   setOnSaveSyncCallback,
@@ -359,15 +355,15 @@ const Settings: Component<SettingsProps> = (props) => {
 
     try {
       const baseUrl = url.replace(/\/+$/, '');
-      await invoke('openclaw_request', {
-        url: `${baseUrl}/v1/chat/completions`,
+      await platform.ai.openClawRequest(
+        `${baseUrl}/v1/chat/completions`,
         token,
-        body: JSON.stringify({
+        JSON.stringify({
           model: 'openclaw:main',
           messages: [{ role: 'user', content: 'ping' }],
           stream: false,
         }),
-      });
+      );
       setOpenClawTestStatus('success');
     } catch (err: any) {
       setOpenClawTestStatus('error');
@@ -433,10 +429,10 @@ const Settings: Component<SettingsProps> = (props) => {
     try {
       const baseUrl = url.replace(/\/+$/, '');
       const apiKey = customProviderApiKey();
-      const response = await invoke<string>('custom_provider_list_models', {
-        url: `${baseUrl}/v1/models`,
+      const response = await platform.ai.customProviderListModels(
+        `${baseUrl}/v1/models`,
         apiKey,
-      });
+      );
       const data = JSON.parse(response);
       const models: string[] = (data.data || []).map((m: { id: string }) => m.id).sort();
       setCustomProviderModels(models);
@@ -465,16 +461,16 @@ const Settings: Component<SettingsProps> = (props) => {
       const baseUrl = url.replace(/\/+$/, '');
       const apiKey = customProviderApiKey();
       const model = customProviderModel() || 'test';
-      await invoke('custom_provider_request', {
-        url: `${baseUrl}/v1/chat/completions`,
+      await platform.ai.customProviderRequest(
+        `${baseUrl}/v1/chat/completions`,
         apiKey,
-        body: JSON.stringify({
+        JSON.stringify({
           model,
           messages: [{ role: 'user', content: 'ping' }],
           stream: false,
           max_tokens: 1,
         }),
-      });
+      );
       setCustomProviderTestStatus('success');
     } catch (err: unknown) {
       setCustomProviderTestStatus('error');
@@ -585,7 +581,7 @@ const Settings: Component<SettingsProps> = (props) => {
   // Load saved login on mount
   onMount(async () => {
     // Get app version
-    getVersion().then(setAppVersion).catch(() => setAppVersion('unknown'));
+    platform.app.getVersion().then(setAppVersion).catch(() => setAppVersion('unknown'));
 
     // Apply saved appearance settings on mount
     applyAppearanceSettings();
@@ -600,7 +596,7 @@ const Settings: Component<SettingsProps> = (props) => {
     mediaQuery.addEventListener('change', handleThemeChange);
 
     // Load OpenCode path setting - prefer backend-registered path, fall back to localStorage
-    const registeredPath = await invoke<string | null>('get_registered_opencode_path').catch(() => null);
+    const registeredPath = await platform.opencode.getRegisteredPath().catch(() => null);
     const savedOpenCodePath = registeredPath || localStorage.getItem('opencode_path');
     if (savedOpenCodePath) {
       setOpenCodePath(savedOpenCodePath);
@@ -770,12 +766,12 @@ const Settings: Component<SettingsProps> = (props) => {
       // Check which skills are installed (installed = enabled)
       const states: Record<string, SkillState> = {};
       for (const skill of manifestSkills) {
-        const installed = await invoke<boolean>('skill_is_installed', { skillId: skill.id });
+        const installed = await platform.skills.isInstalled(skill.id);
         states[skill.id] = { installed, enabled: installed, downloading: false };
       }
 
       // Get all locally installed skills
-      const installedSkillIds = await invoke<string[]>('skill_list_installed');
+      const installedSkillIds = await platform.skills.listInstalled();
 
       // Find custom skills (installed but not in manifest)
       const customSkills: SkillInfo[] = [];
@@ -783,7 +779,7 @@ const Settings: Component<SettingsProps> = (props) => {
         if (!manifestSkillIds.has(skillId)) {
           try {
             // Read SKILL.md to get name and description
-            const content = await invoke<string>('skill_read_file', { skillId, fileName: 'SKILL.md' });
+            const content = await platform.skills.readFile(skillId, 'SKILL.md');
             const name = parseSkillName(content, skillId);
             const description = parseSkillDescription(content);
 
@@ -893,7 +889,7 @@ const Settings: Component<SettingsProps> = (props) => {
             throw new Error(`Failed to download ${file}`);
           }
           const content = await response.text();
-          await invoke('skill_save_file', { skillId, fileName: file, content });
+          await platform.skills.saveFile(skillId, file, content);
         }
 
         setSkillStates(prev => ({
@@ -927,7 +923,7 @@ const Settings: Component<SettingsProps> = (props) => {
         message,
         onConfirm: async () => {
           try {
-            await invoke('skill_delete', { skillId });
+            await platform.skills.remove(skillId);
             setSkillStates(prev => ({
               ...prev,
               [skillId]: { installed: false, enabled: false, downloading: false }
@@ -955,7 +951,7 @@ const Settings: Component<SettingsProps> = (props) => {
   // Open skill editor modal
   const handleEditSkill = async (skill: SkillInfo) => {
     try {
-      const content = await invoke<string>('skill_read_file', { skillId: skill.id, fileName: 'SKILL.md' });
+      const content = await platform.skills.readFile(skill.id, 'SKILL.md');
       setEditingSkill({
         skillId: skill.id,
         skillName: skill.name,
@@ -983,7 +979,7 @@ const Settings: Component<SettingsProps> = (props) => {
     setEditingSkill({ ...editing, saving: true });
 
     try {
-      await invoke('skill_save_file', { skillId: editing.skillId, fileName: 'SKILL.md', content: editing.content });
+      await platform.skills.saveFile(editing.skillId, 'SKILL.md', editing.content);
       
       // Mark as modified if content changed from original (for non-custom skills)
       if (!editing.isCustom && editing.content !== editing.originalContent) {
@@ -1033,7 +1029,7 @@ const Settings: Component<SettingsProps> = (props) => {
           throw new Error(`Failed to download ${file}`);
         }
         const content = await response.text();
-        await invoke('skill_save_file', { skillId: editing.skillId, fileName: file, content });
+        await platform.skills.saveFile(editing.skillId, file, content);
       }
 
       // Remove from modified set
@@ -1043,7 +1039,7 @@ const Settings: Component<SettingsProps> = (props) => {
       localStorage.setItem('skill_modified_ids', JSON.stringify([...modified]));
 
       // Reload the skill content
-      const newContent = await invoke<string>('skill_read_file', { skillId: editing.skillId, fileName: 'SKILL.md' });
+      const newContent = await platform.skills.readFile(editing.skillId, 'SKILL.md');
       
       // Update the skill name in case it was changed
       const newName = parseSkillName(newContent, editing.skillId);
@@ -1412,14 +1408,14 @@ const Settings: Component<SettingsProps> = (props) => {
   const getLocalFiles = async (basePath: string): Promise<{ path: string; content: string }[]> => {
     const files: { path: string; content: string }[] = [];
 
-    const entries = await invoke<Array<{ name: string; path: string; isDirectory: boolean; children?: unknown[] }>>('list_files', { path: basePath });
+    const entries = await platform.vault.list(basePath);
 
     const processEntries = async (entries: Array<{ name: string; path: string; isDirectory: boolean; children?: unknown[] }>) => {
       for (const entry of entries) {
         if (entry.isDirectory && entry.children) {
           await processEntries(entry.children as typeof entries);
         } else if (entry.name.endsWith('.md')) {
-          const content = await invoke<string>('read_file', { path: entry.path, vaultPath: props.vaultPath });
+          const content = await platform.vault.read(entry.path, props.vaultPath ?? '');
           // Get relative path from vault
           const relativePath = entry.path.replace(basePath + '/', '');
           files.push({ path: relativePath, content });
@@ -1680,10 +1676,10 @@ const Settings: Component<SettingsProps> = (props) => {
         // Ensure parent directory exists
         const parentDir: string = fullPath.substring(0, fullPath.lastIndexOf('/'));
         if (parentDir !== props.vaultPath) {
-          await invoke('create_folder', { path: parentDir, vaultPath: props.vaultPath }).catch(() => {});
+          await platform.vault.createFolder(parentDir, props.vaultPath ?? '').catch(() => {});
         }
 
-        await invoke('write_file', { path: fullPath, content: remoteFile.data.content, vaultPath: props.vaultPath });
+        await platform.vault.write(fullPath, remoteFile.data.content, props.vaultPath ?? '');
         downloadedCount++;
       }
 
@@ -1820,10 +1816,10 @@ const Settings: Component<SettingsProps> = (props) => {
       const parentDir = fullPath.substring(0, fullPath.lastIndexOf('/'));
       
       if (parentDir !== props.vaultPath) {
-        await invoke('create_folder', { path: parentDir, vaultPath: props.vaultPath }).catch(() => {});
+        await platform.vault.createFolder(parentDir, props.vaultPath ?? '').catch(() => {});
       }
-      
-      await invoke('write_file', { path: fullPath, content: data.content, vaultPath: props.vaultPath });
+
+      await platform.vault.write(fullPath, data.content, props.vaultPath ?? '');
       
       // Remove from recoverable list
       setRecoverableFiles(prev => prev.filter(f => f.path !== file.path));
@@ -1864,7 +1860,7 @@ const Settings: Component<SettingsProps> = (props) => {
   // OpenCode path handlers
   const handleBrowseOpenCode = async () => {
     try {
-      const selected = await openDialog({
+      const selected = await platform.dialog.open({
         multiple: false,
         title: 'Select OpenCode executable',
       });
@@ -1872,7 +1868,7 @@ const Settings: Component<SettingsProps> = (props) => {
       if (selected && typeof selected === 'string') {
         // Register the path on the backend (validates it's executable)
         try {
-          const registeredPath = await invoke<string>('register_opencode_path', { path: selected });
+          const registeredPath = await platform.opencode.registerPath(selected);
           setOpenCodePath(registeredPath);
           localStorage.setItem('opencode_path', registeredPath);
         } catch (err) {
@@ -1892,7 +1888,7 @@ const Settings: Component<SettingsProps> = (props) => {
     if (path.trim()) {
       // Register the path on the backend (validates it's executable)
       try {
-        const registeredPath = await invoke<string>('register_opencode_path', { path });
+        const registeredPath = await platform.opencode.registerPath(path);
         localStorage.setItem('opencode_path', registeredPath);
       } catch (err) {
         // Still show the path in the input but don't save to localStorage
@@ -1902,7 +1898,7 @@ const Settings: Component<SettingsProps> = (props) => {
     } else {
       localStorage.removeItem('opencode_path');
       // Clear backend registration
-      await invoke('register_opencode_path', { path: '' }).catch(() => {});
+      await platform.opencode.registerPath('').catch(() => {});
     }
   };
 
@@ -1910,7 +1906,7 @@ const Settings: Component<SettingsProps> = (props) => {
     setOpenCodePath('');
     localStorage.removeItem('opencode_path');
     // Clear backend registration
-    await invoke('register_opencode_path', { path: '' }).catch(() => {});
+    await platform.opencode.registerPath('').catch(() => {});
   };
 
   // Load OpenCode providers and current model
@@ -1920,16 +1916,16 @@ const Settings: Component<SettingsProps> = (props) => {
     try {
       // Try to auto-detect OpenCode installation
       try {
-        const detectedPath = await invoke<string | null>('check_opencode_installed');
+        const detectedPath = await platform.opencode.isInstalled();
         setOpenCodeDetectedPath(detectedPath);
-        
+
         // If we detected a path and user hasn't set a custom one, use the detected path
         // Auto-detected paths are already in known locations, so register them
         const savedPath = localStorage.getItem('opencode_path');
         if (detectedPath && !savedPath) {
           setOpenCodePath(detectedPath);
           localStorage.setItem('opencode_path', detectedPath);
-          await invoke('register_opencode_path', { path: detectedPath }).catch(() => {});
+          await platform.opencode.registerPath(detectedPath).catch(() => {});
         }
       } catch (err) {
         console.log('Could not auto-detect OpenCode:', err);
@@ -2028,7 +2024,7 @@ const Settings: Component<SettingsProps> = (props) => {
       const result = await startProviderOAuth(providerId, methodIndex);
       if (result?.url) {
         // Open the OAuth URL in the browser
-        await open(result.url);
+        await platform.shell.openExternal(result.url);
         
         // Show instructions if available
         if (result.instructions) {
@@ -2185,7 +2181,7 @@ const Settings: Component<SettingsProps> = (props) => {
   // Import custom skill handler
   const handleImportSkill = async () => {
     try {
-      const selected = await openDialog({
+      const selected = await platform.dialog.open({
         multiple: false,
         title: 'Select skill file',
         filters: [{
@@ -2200,11 +2196,10 @@ const Settings: Component<SettingsProps> = (props) => {
 
         if (selected.endsWith('.md')) {
           // Import single SKILL.md file
-          // Use Tauri FS plugin directly since this reads from user-selected path outside vault
-          const content = await readTextFile(selected);
+          const content = await platform.dialog.readTextFile(selected);
           const skillId = fileName.replace('.md', '').toLowerCase().replace(/[^a-z0-9-]/g, '-');
           const skillName = parseSkillName(content, skillId);
-          await invoke('skill_save_file', { skillId, fileName: 'SKILL.md', content });
+          await platform.skills.saveFile(skillId, 'SKILL.md', content);
 
           setModalConfig({
             type: 'info',
@@ -2213,12 +2208,12 @@ const Settings: Component<SettingsProps> = (props) => {
           });
         } else if (selected.endsWith('.zip')) {
           // Import ZIP archive
-          const skillId = await invoke<string>('skill_import_zip', { zipPath: selected });
-          
+          const skillId = await platform.skills.importZip(selected);
+
           // Read the SKILL.md to get the skill name
-          const content = await invoke<string>('skill_read_file', { skillId, fileName: 'SKILL.md' });
+          const content = await platform.skills.readFile(skillId, 'SKILL.md');
           const skillName = parseSkillName(content, skillId);
-          
+
           setModalConfig({
             type: 'info',
             title: 'Skill imported',
@@ -3323,7 +3318,7 @@ const Settings: Component<SettingsProps> = (props) => {
                     <div class="setting-name">Download OpenCode</div>
                     <div class="setting-description">Get the latest version of OpenCode</div>
                   </div>
-                  <button class="setting-button" onClick={() => open('https://opencode.ai/download')}>
+                  <button class="setting-button" onClick={() => platform.shell.openExternal('https://opencode.ai/download')}>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                       <polyline points="7 10 12 15 17 10"></polyline>
@@ -3915,7 +3910,7 @@ const Settings: Component<SettingsProps> = (props) => {
                                 <Show when={!state().downloading}>
                                   <button
                                     class="skill-source-btn"
-                                    onClick={() => open(`${SKILLS_BASE_URL}/${skill.id}/SKILL.md`)}
+                                    onClick={() => platform.shell.openExternal(`${SKILLS_BASE_URL}/${skill.id}/SKILL.md`)}
                                     title="View source on GitHub"
                                   >
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -4024,7 +4019,7 @@ const Settings: Component<SettingsProps> = (props) => {
                                 <Show when={!isInstalling()}>
                                   <button
                                     class="skill-source-btn"
-                                    onClick={() => open(getSkillGitHubUrl(skill.topSource, skill.id))}
+                                    onClick={() => platform.shell.openExternal(getSkillGitHubUrl(skill.topSource, skill.id))}
                                     title="View on GitHub"
                                   >
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

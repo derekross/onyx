@@ -13,7 +13,7 @@
 import { nip19, generateSecretKey, getPublicKey } from 'nostr-tools';
 import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils.js';
 import { NRelay1 } from '@nostrify/nostrify';
-import { invoke } from '@tauri-apps/api/core';
+import { platform } from '@platform';
 import type { NostrIdentity } from './types';
 import { authenticateWithBiometric } from '../biometric';
 import { isMobile } from '../platform';
@@ -21,7 +21,7 @@ import { isMobile } from '../platform';
 // Keyring helper functions
 async function keyringSet(key: string, value: string): Promise<void> {
   try {
-    await invoke('keyring_set', { key, value });
+    await platform.secrets.set(key, value);
   } catch (e) {
     console.error('Keyring set failed:', e);
     throw e;
@@ -30,8 +30,7 @@ async function keyringSet(key: string, value: string): Promise<void> {
 
 async function keyringGet(key: string): Promise<string | null> {
   try {
-    const result = await invoke<string | null>('keyring_get', { key });
-    return result;
+    return await platform.secrets.get(key);
   } catch (e) {
     console.error('Keyring get failed:', e);
     throw e;
@@ -40,7 +39,7 @@ async function keyringGet(key: string): Promise<string | null> {
 
 async function keyringDelete(key: string): Promise<void> {
   try {
-    await invoke('keyring_delete', { key });
+    await platform.secrets.delete(key);
   } catch (e) {
     console.error('Keyring delete failed:', e);
     throw e;

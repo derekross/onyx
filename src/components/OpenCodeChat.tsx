@@ -3,9 +3,7 @@
  */
 
 import { Component, createSignal, createEffect, onMount, onCleanup, For, Show } from 'solid-js';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-shell';
+import { platform } from '@platform';
 import {
   initClient,
   isServerRunning,
@@ -26,7 +24,7 @@ import {
   type ToolPermission,
 } from '../lib/opencode/client';
 import { getCurrentLogin, getSavedProfile, type UserProfile } from '../lib/nostr/login';
-import { sanitizeImageUrl, sanitizeUrl } from '../lib/security';
+import { escapeHtml, escapeHtmlAttr, sanitizeImageUrl, sanitizeUrl, unescapeHtml } from '../lib/security';
 
 // Install progress payload from Rust backend
 interface InstallProgress {
@@ -41,12 +39,9 @@ interface InstallProgress {
  * Convert markdown to HTML for chat display
  */
 function markdownToHtml(markdown: string): string {
-  let html = markdown
-    // Escape HTML first
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-  
+  // Escape HTML first (incl. quotes, so attribute injection is impossible)
+  let html = escapeHtml(markdown);
+
   // Code blocks (must be before inline code)
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => {
     const langClass = lang ? ` class="language-${lang}"` : '';
@@ -66,9 +61,11 @@ function markdownToHtml(markdown: string): string {
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
   
-  // Links - sanitize URLs to prevent javascript: and other dangerous protocols
+  // Links - sanitize URLs to prevent javascript: and other dangerous protocols.
+  // The captured url was HTML-escaped above; decode it back to the raw URL,
+  // sanitize, then attribute-encode for safe interpolation into href.
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, text, url) => {
-    const safeUrl = sanitizeUrl(url);
+    const safeUrl = escapeHtmlAttr(sanitizeUrl(unescapeHtml(url)));
     return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${text}</a>`;
   });
   
@@ -194,7 +191,9 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
   createEffect(() => {
     messages(); // Track messages
     streamingContent(); // Track streaming content
-    messagesEndRef?.scrollIntoView({ behavior: 'smooth' });
+    // Use 'auto' (instant) scrolling: this effect fires on every SSE delta
+    // during streaming, and smooth scrolling churns on rapid updates.
+    messagesEndRef?.scrollIntoView({ behavior: 'auto' });
   });
 
   // Check server status and start if needed
@@ -217,12 +216,12 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
         if (!opencodePath) {
           // Try to auto-detect OpenCode installation
           try {
-            const detectedPath = await invoke<string | null>('check_opencode_installed');
+            const detectedPath = await platform.opencode.isInstalled();
             if (detectedPath) {
               opencodePath = detectedPath;
               localStorage.setItem('opencode_path', detectedPath);
               // Register on backend so it passes validation
-              await invoke('register_opencode_path', { path: detectedPath }).catch(() => {});
+              await platform.opencode.registerPath(detectedPath).catch(() => {});
               console.log('[OpenCodeChat] Auto-detected OpenCode at:', detectedPath);
             }
           } catch (err) {
@@ -246,7 +245,7 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
   // Check if a command exists in PATH
   const commandExists = async (_cmd: string): Promise<boolean> => {
     try {
-      const result = await invoke<string | null>('check_opencode_installed');
+      const result = await platform.opencode.isInstalled();
       return result !== null;
     } catch {
       return false;
@@ -260,8 +259,8 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
       const customPath = localStorage.getItem('opencode_path');
       const openCodeCommand = customPath && customPath.trim() ? customPath.trim() : 'opencode';
       
-      // Start opencode serve in the background via Tauri
-      await invoke('start_opencode_server', {
+      // Start opencode serve in the background via the platform adapter
+      await platform.opencode.startServer({
         command: openCodeCommand,
         cwd: props.vaultPath || undefined,
         port: 4096,
@@ -819,7 +818,7 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
         const fileContexts: string[] = [];
         for (const f of filesToMention) {
           try {
-            const content = await invoke<string>('read_file', { path: f.path, vaultPath: props.vaultPath });
+            const content = await platform.vault.read(f.path, props.vaultPath ?? '');
             const truncated = content.length > 50000 ? content.slice(0, 50000) + '\n[...truncated]' : content;
             // Include full path so OpenCode can edit the correct file
             fileContexts.push(`=== File: ${f.path} ===\n${truncated}`);
@@ -1037,44 +1036,36 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
       message: 'Preparing installation...'
     });
 
-    // Listen for progress events
-    const unlisten = await listen<InstallProgress>('opencode-install-progress', (event) => {
-      setInstallProgress(event.payload);
-      
-      if (event.payload.stage === 'error') {
-        setInstallError(event.payload.message);
-        setIsInstalling(false);
-      }
-    });
-
     try {
-      const installedPath = await invoke<string>('install_opencode');
-      
+      const installedPath = await platform.opencode.install((payload) => {
+        setInstallProgress(payload as InstallProgress);
+        if (payload.stage === 'error') {
+          setInstallError(payload.message);
+          setIsInstalling(false);
+        }
+      });
+
       // Save the path to localStorage and register on backend
       localStorage.setItem('opencode_path', installedPath);
-      await invoke('register_opencode_path', { path: installedPath }).catch(() => {});
-      
-      // Clean up listener
-      unlisten();
-      
+      await platform.opencode.registerPath(installedPath).catch(() => {});
+
       // Wait a moment then try to connect
       setInstallProgress({
         stage: 'complete',
         progress: 100,
         message: 'OpenCode installed successfully! Starting server...'
       });
-      
+
       // Brief delay to show success message
       await new Promise(resolve => setTimeout(resolve, 1500));
-      
+
       setIsInstalling(false);
       setInstallProgress(null);
-      
+
       // Try to start the server
       checkAndStartServer();
     } catch (err) {
       console.error('Failed to install OpenCode:', err);
-      unlisten();
       setInstallError(err instanceof Error ? err.message : String(err));
       setIsInstalling(false);
     }
@@ -1227,7 +1218,7 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
             </button>
             <button
               class="opencode-manual-btn"
-              onClick={() => open('https://opencode.ai/download')}
+              onClick={() => platform.shell.openExternal('https://opencode.ai/download')}
             >
               Install Manually
             </button>
@@ -1267,7 +1258,7 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
             
             <button
               class="opencode-manual-btn"
-              onClick={() => open('https://opencode.ai/download')}
+              onClick={() => platform.shell.openExternal('https://opencode.ai/download')}
             >
               Download Manually
             </button>

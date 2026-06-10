@@ -5,9 +5,8 @@
  */
 
 import { Component, createSignal, createEffect, onMount, onCleanup, For, Show } from 'solid-js';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { sanitizeUrl } from '../lib/security';
+import { platform } from '@platform';
+import { escapeHtml, escapeHtmlAttr, sanitizeUrl, unescapeHtml } from '../lib/security';
 
 // --- Types ---
 
@@ -32,10 +31,8 @@ interface CustomProviderChatProps {
 // --- Markdown rendering ---
 
 function markdownToHtml(markdown: string): string {
-  let html = markdown
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  // Escape HTML first (incl. quotes, so attribute injection is impossible)
+  let html = escapeHtml(markdown);
 
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => {
     const langClass = lang ? ` class="language-${lang}"` : '';
@@ -50,8 +47,10 @@ function markdownToHtml(markdown: string): string {
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
 
+  // The captured url was HTML-escaped above; decode it back to the raw URL,
+  // sanitize, then attribute-encode for safe interpolation into href.
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, text, url) => {
-    const safeUrl = sanitizeUrl(url);
+    const safeUrl = escapeHtmlAttr(sanitizeUrl(unescapeHtml(url)));
     return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${text}</a>`;
   });
 
@@ -155,7 +154,9 @@ const CustomProviderChat: Component<CustomProviderChatProps> = (props) => {
 
   const scrollToBottom = () => {
     requestAnimationFrame(() => {
-      messagesEndRef?.scrollIntoView({ behavior: 'smooth' });
+      // 'auto' (instant): this runs on every SSE delta during streaming,
+      // and smooth scrolling churns on rapid updates.
+      messagesEndRef?.scrollIntoView({ behavior: 'auto' });
     });
   };
 
@@ -229,9 +230,7 @@ const CustomProviderChat: Component<CustomProviderChatProps> = (props) => {
     return new Promise<string>((resolve, reject) => {
       let resolved = false;
 
-      listen<string>(`custom-provider-stream-${requestId}`, (event) => {
-        const data = event.payload;
-
+      platform.ai.onCustomProviderChunk(requestId, (data) => {
         if (data === '__DONE__') {
           resolved = true;
           resolve(accumulated);
@@ -277,12 +276,7 @@ const CustomProviderChat: Component<CustomProviderChatProps> = (props) => {
           streamCleanup = null;
         };
 
-        invoke('custom_provider_stream', {
-          requestId,
-          url: fullUrl,
-          apiKey,
-          body,
-        }).catch((err) => {
+        platform.ai.customProviderStream(requestId, fullUrl, apiKey, body).catch((err) => {
           if (!resolved) {
             resolved = true;
             reject(err);
@@ -329,7 +323,7 @@ const CustomProviderChat: Component<CustomProviderChatProps> = (props) => {
       const fileContexts: string[] = [];
       for (const f of filesToMention) {
         try {
-          const content = await invoke<string>('read_file', { path: f.path, vaultPath: props.vaultPath });
+          const content = await platform.vault.read(f.path, props.vaultPath ?? '');
           const truncated = content.length > 50000 ? content.slice(0, 50000) + '\n[...truncated]' : content;
           fileContexts.push(`=== File: ${f.path} ===\n${truncated}`);
         } catch (err) {

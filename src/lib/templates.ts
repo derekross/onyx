@@ -4,7 +4,7 @@
  * Allows users to create notes from templates and insert template content.
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { platform } from '@platform';
 import dayjs from 'dayjs';
 
 export interface TemplatesConfig {
@@ -72,7 +72,7 @@ export async function listTemplates(
   const folderPath = `${vaultPath}/${config.folder}`;
   
   try {
-    const files = await invoke<Array<{ name: string; path: string; isDirectory: boolean }>>('list_files', { path: folderPath });
+    const files = await platform.vault.list(folderPath);
     return files
       .filter(f => !f.isDirectory && f.name.endsWith('.md'))
       .map(f => ({
@@ -89,7 +89,7 @@ export async function listTemplates(
  * Read a template's content
  */
 export async function readTemplate(templatePath: string, vaultPath?: string): Promise<string> {
-  return await invoke<string>('read_file', { path: templatePath, vaultPath });
+  return await platform.vault.read(templatePath, vaultPath ?? '');
 }
 
 /**
@@ -114,15 +114,15 @@ export async function createNoteFromTemplate(
   // Ensure target folder exists
   const targetFolderPath = `${vaultPath}/${targetFolder}`;
   try {
-    await invoke('create_folder', { path: targetFolderPath, vaultPath });
+    await platform.vault.createFolder(targetFolderPath, vaultPath);
   } catch {
     // Folder may already exist
   }
-  
+
   // Create the note
   const notePath = `${targetFolderPath}/${noteName}.md`;
-  await invoke('create_file', { path: notePath, vaultPath });
-  await invoke('write_file', { path: notePath, content, vaultPath });
+  await platform.vault.createFile(notePath, vaultPath);
+  await platform.vault.write(notePath, content, vaultPath);
   
   return notePath;
 }
@@ -149,14 +149,14 @@ export async function ensureTemplatesFolder(
   const folderPath = `${vaultPath}/${config.folder}`;
   
   try {
-    await invoke('create_folder', { path: folderPath, vaultPath });
+    await platform.vault.createFolder(folderPath, vaultPath);
   } catch {
     // Folder may already exist
   }
-  
+
   // Check if there are any templates
   const templates = await listTemplates(vaultPath, config);
-  
+
   if (templates.length === 0) {
     // Create a sample template
     const samplePath = `${folderPath}/Note.md`;
@@ -167,10 +167,10 @@ Created: {{date}}
 ## Notes
 
 `;
-    
+
     try {
-      await invoke('create_file', { path: samplePath, vaultPath });
-      await invoke('write_file', { path: samplePath, content: sampleContent, vaultPath });
+      await platform.vault.createFile(samplePath, vaultPath);
+      await platform.vault.write(samplePath, sampleContent, vaultPath);
     } catch {
       // Template may already exist
     }

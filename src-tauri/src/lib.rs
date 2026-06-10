@@ -114,6 +114,16 @@ fn get_settings_path(app: &AppHandle) -> PathBuf {
     get_config_dir_with_app(app).join("settings.json")
 }
 
+/// Read the configured vault path from settings.json and return it canonicalized.
+/// Returns None if no vault is configured or it cannot be resolved.
+fn get_configured_vault(app: &AppHandle) -> Option<PathBuf> {
+    let settings_path = get_settings_path(app);
+    let content = fs::read_to_string(&settings_path).ok()?;
+    let settings: AppSettings = serde_json::from_str(&content).ok()?;
+    let vault = settings.vault_path?;
+    Path::new(&vault).canonicalize().ok()
+}
+
 /// Validates that a path is within the allowed vault directory.
 /// Returns the canonicalized path if valid, or an error if path traversal is detected.
 fn validate_vault_path(path: &str, vault_path: &str) -> Result<PathBuf, String> {
@@ -121,14 +131,44 @@ fn validate_vault_path(path: &str, vault_path: &str) -> Result<PathBuf, String> 
     let vault = Path::new(vault_path);
     
     // Canonicalize both paths to resolve any .. or symlinks
-    // For non-existent paths (e.g., new files), canonicalize the parent
+    // For non-existent paths (e.g., new files or nested folders), walk up to the
+    // nearest existing ancestor, canonicalize that, then re-append the remaining
+    // components after verifying none of them are `..` (or otherwise unsafe).
     let canonical_path = if path.exists() {
         path.canonicalize().map_err(|e| format!("Invalid path: {}", e))?
     } else {
-        // For new files, the parent must exist and be within vault
-        let parent = path.parent().ok_or("Invalid path: no parent directory")?;
-        let canonical_parent = parent.canonicalize().map_err(|e| format!("Invalid path: {}", e))?;
-        canonical_parent.join(path.file_name().ok_or("Invalid path: no filename")?)
+        // Find the nearest existing ancestor (skip the path itself, which doesn't exist)
+        let existing_ancestor = path
+            .ancestors()
+            .skip(1)
+            .find(|a| a.exists())
+            .ok_or("Invalid path: no existing ancestor directory")?;
+        let canonical_ancestor = existing_ancestor
+            .canonicalize()
+            .map_err(|e| format!("Invalid path: {}", e))?;
+        // Verify the remaining (non-existent) components are plain names
+        let remainder = path
+            .strip_prefix(existing_ancestor)
+            .map_err(|_| "Invalid path: unable to resolve path components".to_string())?;
+        let mut resolved = canonical_ancestor;
+        for component in remainder.components() {
+            match component {
+                std::path::Component::Normal(name) => {
+                    if name.is_empty() {
+                        return Err("Invalid path: empty path component".to_string());
+                    }
+                    resolved.push(name);
+                }
+                std::path::Component::CurDir => {}
+                _ => {
+                    return Err(format!(
+                        "Invalid path: unsafe component in '{}'",
+                        path.display()
+                    ));
+                }
+            }
+        }
+        resolved
     };
     
     let canonical_vault = vault.canonicalize().map_err(|e| format!("Invalid vault path: {}", e))?;
@@ -319,11 +359,14 @@ fn write_binary_file(path: String, data: Vec<u8>, vault_path: Option<String>) ->
 }
 
 #[tauri::command]
-fn read_binary_file(path: String, vault_path: Option<String>) -> Result<Vec<u8>, String> {
+fn read_binary_file(path: String, vault_path: Option<String>) -> Result<tauri::ipc::Response, String> {
     // Always validate path is within vault
     let vault = vault_path.ok_or("vault_path is required for read_binary_file")?;
     validate_vault_path(&path, &vault)?;
-    fs::read(&path).map_err(|e| e.to_string())
+    // Return a raw IPC response so the frontend receives an ArrayBuffer instead of
+    // a JSON number array (huge serialization overhead for large files like PDFs).
+    let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[tauri::command]
@@ -359,6 +402,20 @@ fn set_vault_scope(app: AppHandle, vault_path: String) -> Result<(), String> {
     let path = Path::new(&vault_path);
     if !path.exists() || !path.is_dir() {
         return Err(format!("Vault path does not exist or is not a directory: {}", vault_path));
+    }
+    // Reject pathological scopes: the filesystem root and the home directory itself.
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("Invalid vault path: {}", e))?;
+    if canonical.parent().is_none() {
+        return Err("Vault path cannot be the filesystem root".to_string());
+    }
+    if let Some(home) = dirs::home_dir() {
+        if let Ok(home_canonical) = home.canonicalize() {
+            if canonical == home_canonical {
+                return Err("Vault path cannot be the home directory itself".to_string());
+            }
+        }
     }
     app.fs_scope()
         .allow_directory(path, true)
@@ -442,35 +499,43 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 #[tauri::command]
 fn open_in_default_app(path: String) -> Result<(), String> {
+    // Validate the path exists and resolve it to an absolute canonical path before
+    // handing it to any external program (prevents injection / opening bogus paths).
+    let p = Path::new(&path);
+    if !p.exists() {
+        return Err(format!("Path does not exist: {}", path));
+    }
+    let canonical = p.canonicalize().map_err(|e| format!("Invalid path: {}", e))?;
+    if !canonical.is_file() {
+        return Err(format!("Path is not a file: {}", path));
+    }
     #[cfg(target_os = "linux")]
     {
         Command::new("xdg-open")
-            .arg(&path)
+            .arg(&canonical)
             .spawn()
             .map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "macos")]
     {
         Command::new("open")
-            .arg(&path)
+            .arg(&canonical)
             .spawn()
             .map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "windows")]
     {
-        // Validate the path exists as a file or directory to prevent command injection
-        // via shell metacharacters in the path string.
-        let p = Path::new(&path);
-        if !p.exists() {
-            return Err(format!("Path does not exist: {}", path));
-        }
-        // Use canonicalize to resolve to an absolute path, preventing injection
-        let canonical = p.canonicalize().map_err(|e| format!("Invalid path: {}", e))?;
         Command::new("cmd")
             .args(["/C", "start", "", &canonical.to_string_lossy()])
             .spawn()
             .map_err(|e| e.to_string())?;
     }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        let _ = canonical;
+        return Err("Opening files in the default app is not supported on this platform".to_string());
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     Ok(())
 }
 
@@ -542,12 +607,28 @@ fn get_file_stats(path: String) -> Result<FileStats, String> {
 }
 
 #[tauri::command]
-fn search_files(path: String, query: String) -> Result<Vec<SearchResult>, String> {
+async fn search_files(app: AppHandle, path: String, query: String) -> Result<Vec<SearchResult>, String> {
+    const MAX_RESULTS: usize = 50;
+    const MAX_MATCHES_PER_FILE: usize = 5;
+
+    // Security: only allow searching within the configured vault
+    let vault = get_configured_vault(&app).ok_or("No vault is configured")?;
+    let root = Path::new(&path)
+        .canonicalize()
+        .map_err(|e| format!("Invalid path: {}", e))?;
+    if !root.starts_with(&vault) {
+        return Err("Access denied: search path is outside the vault directory".to_string());
+    }
+
     let mut results: Vec<SearchResult> = Vec::new();
     let query_lower = query.to_lowercase();
 
-    for entry in WalkDir::new(&path)
+    for entry in WalkDir::new(&root)
         .into_iter()
+        // Skip hidden files/directories (e.g. .git, .obsidian) entirely
+        .filter_entry(|e| {
+            e.depth() == 0 || !e.file_name().to_string_lossy().starts_with('.')
+        })
         .filter_map(|e| e.ok())
         .filter(|e| {
             e.path().is_file() && e.path().extension().map(|ext| ext == "md").unwrap_or(false)
@@ -563,6 +644,9 @@ fn search_files(path: String, query: String) -> Result<Vec<SearchResult>, String
                         line: line_num + 1,
                         content: line.chars().take(100).collect(),
                     });
+                    if matches.len() >= MAX_MATCHES_PER_FILE {
+                        break;
+                    }
                 }
             }
 
@@ -576,17 +660,18 @@ fn search_files(path: String, query: String) -> Result<Vec<SearchResult>, String
                         .to_string(),
                     matches,
                 });
+                if results.len() >= MAX_RESULTS {
+                    break;
+                }
             }
         }
     }
 
-    // Limit results
-    results.truncate(50);
     Ok(results)
 }
 
 #[tauri::command]
-fn list_assets(path: String) -> Result<Vec<AssetEntry>, String> {
+async fn list_assets(path: String) -> Result<Vec<AssetEntry>, String> {
     let mut assets: Vec<AssetEntry> = Vec::new();
     let vault_path = Path::new(&path);
 
@@ -596,17 +681,14 @@ fn list_assets(path: String) -> Result<Vec<AssetEntry>, String> {
 
     for entry in WalkDir::new(&path)
         .into_iter()
+        // Prune hidden files and directories (e.g. .git) instead of descending into them
+        .filter_entry(|e| {
+            e.depth() == 0 || !e.file_name().to_string_lossy().starts_with('.')
+        })
         .filter_map(|e| e.ok())
         .filter(|e| e.path().is_file())
     {
         let file_path = entry.path();
-
-        // Skip hidden files
-        if let Some(name) = file_path.file_name() {
-            if name.to_string_lossy().starts_with('.') {
-                continue;
-            }
-        }
 
         // Check if it's an embeddable file type
         if let Some(ext) = file_path.extension() {
@@ -926,7 +1008,9 @@ fn register_opencode_path(app: AppHandle, path: String) -> Result<String, String
         // Clear registration
         if let Ok(store) = app.store("security.json") {
             store.delete("opencode_registered_path");
-            let _ = store.save();
+            if let Err(e) = store.save() {
+                eprintln!("[Store] Failed to persist security.json after clearing OpenCode path: {}", e);
+            }
         }
         return Ok(String::new());
     }
@@ -968,7 +1052,9 @@ fn register_opencode_path(app: AppHandle, path: String) -> Result<String, String
         "opencode_registered_path",
         serde_json::Value::String(canonical_str.clone()),
     );
-    let _ = store.save();
+    if let Err(e) = store.save() {
+        eprintln!("[Store] Failed to persist security.json after registering OpenCode path: {}", e);
+    }
 
     Ok(canonical_str)
 }
@@ -1444,14 +1530,28 @@ mod pty {
     }
     
     impl PtyState {
-        /// Remove sessions that have exceeded their timeout
+        /// Remove sessions that have exceeded their timeout, killing their child processes
         pub fn cleanup_expired_sessions(&mut self) {
             let now = Instant::now();
             self.sessions.retain(|_id, session| {
-                now.duration_since(session.created_at) < PTY_SESSION_TIMEOUT
+                let keep = now.duration_since(session.created_at) < PTY_SESSION_TIMEOUT;
+                if !keep {
+                    // Dropping the child does not terminate it; kill and reap explicitly
+                    let _ = session._child.kill();
+                    let _ = session._child.wait();
+                }
+                keep
             });
         }
-        
+
+        /// Kill and reap all PTY child processes and clear the session map
+        pub fn kill_all(&mut self) {
+            for (_id, mut session) in self.sessions.drain() {
+                let _ = session._child.kill();
+                let _ = session._child.wait();
+            }
+        }
+
         /// Check if we can create a new session (respects max limit)
         pub fn can_create_session(&self) -> bool {
             self.sessions.len() < MAX_PTY_SESSIONS
@@ -1619,7 +1719,10 @@ mod pty {
         session_id: String,
     ) -> Result<(), String> {
         let mut state = state.lock();
-        if state.sessions.remove(&session_id).is_some() {
+        if let Some(mut session) = state.sessions.remove(&session_id) {
+            // Dropping the child does not terminate it; kill and reap explicitly
+            let _ = session._child.kill();
+            let _ = session._child.wait();
             Ok(())
         } else {
             Err("Session not found".to_string())
@@ -1640,6 +1743,10 @@ mod pty {
         fn default() -> Self {
             Self
         }
+    }
+    impl PtyState {
+        /// No-op on Android (no PTY support)
+        pub fn kill_all(&mut self) {}
     }
     pub type SharedPtyState = Arc<Mutex<PtyState>>;
 
@@ -1919,6 +2026,18 @@ fn skill_import_zip(zip_path: String) -> Result<String, String> {
         return Err("ZIP does not contain a SKILL.md file".to_string());
     };
 
+    // Security: the skill ID must be a single, plain path component (no `..`, `/`, etc.)
+    // so that joining it onto the skills directory cannot escape it.
+    {
+        let skill_id_path = Path::new(&skill_id);
+        let mut components = skill_id_path.components();
+        let valid = matches!(components.next(), Some(std::path::Component::Normal(_)))
+            && components.next().is_none();
+        if skill_id.is_empty() || !valid {
+            return Err(format!("Invalid skill ID in ZIP: {}", skill_id));
+        }
+    }
+
     let skill_dir = get_skills_dir().join(&skill_id);
     fs::create_dir_all(&skill_dir).map_err(|e| format!("Failed to create skill directory: {}", e))?;
 
@@ -1932,6 +2051,13 @@ fn skill_import_zip(zip_path: String) -> Result<String, String> {
         let mut file = archive
             .by_index(i)
             .map_err(|e| format!("Failed to read ZIP entry: {}", e))?;
+
+        // Security: reject entries with unsafe names (zip-slip, absolute paths, `..`)
+        if file.enclosed_name().is_none() {
+            eprintln!("[Skills] Skipping unsafe ZIP entry: {}", file.name());
+            continue;
+        }
+
         let name = file.name().to_string();
 
         // Skip directories
@@ -1957,7 +2083,24 @@ fn skill_import_zip(zip_path: String) -> Result<String, String> {
             continue;
         }
 
-        let output_path = skill_dir.join(&output_name);
+        // Security: the derived relative path must consist solely of normal components
+        // (no `..`, no root/prefix, no empty segments)
+        let output_rel = Path::new(&output_name);
+        if !output_rel
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+        {
+            eprintln!("[Skills] Skipping unsafe ZIP entry: {}", name);
+            continue;
+        }
+
+        let output_path = skill_dir.join(output_rel);
+
+        // Defense in depth: lexically verify the final path stays within the skill dir
+        if !output_path.starts_with(&skill_dir) {
+            eprintln!("[Skills] Skipping ZIP entry escaping skill directory: {}", name);
+            continue;
+        }
 
         // Create parent directories if needed
         if let Some(parent) = output_path.parent() {
@@ -2041,9 +2184,27 @@ async fn fetch_skills_sh(pages: Option<u32>) -> Result<String, String> {
 
 #[tauri::command]
 async fn fetch_skill_file(url: String) -> Result<String, String> {
+    // Security: only fetch public HTTPS URLs; block internal/loopback targets (SSRF)
+    let parsed = reqwest::Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
+    if parsed.scheme() != "https" {
+        return Err("Only https:// URLs are allowed".to_string());
+    }
+    let host = parsed
+        .host_str()
+        .ok_or("URL has no host")?
+        .to_lowercase();
+    // Reject IP literals (IPv6 host_str is bracketed, e.g. "[::1]")
+    let bare_host = host.trim_start_matches('[').trim_end_matches(']');
+    if bare_host.parse::<std::net::IpAddr>().is_ok() {
+        return Err("IP address hosts are not allowed".to_string());
+    }
+    if host == "localhost" || host.ends_with(".local") || host.ends_with(".internal") {
+        return Err("Internal hosts are not allowed".to_string());
+    }
+
     let client = reqwest::Client::new();
     let response = client
-        .get(&url)
+        .get(parsed)
         .timeout(Duration::from_secs(30))
         .send()
         .await
@@ -2580,8 +2741,8 @@ pub fn run() {
         .manage(Arc::new(Mutex::new(PtyState::default())) as SharedPtyState)
         .manage(Arc::new(Mutex::new(WatcherState::default())) as SharedWatcherState)
         .manage(opencode_server_state)
-        // Clean up OpenCode server on app exit
-        .on_window_event(move |_window, event| {
+        // Clean up OpenCode server and PTY children on app exit
+        .on_window_event(move |window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 let mut server_state = opencode_server_state_clone.lock();
                 if let Some(ref mut child) = server_state.process {
@@ -2590,6 +2751,11 @@ pub fn run() {
                 }
                 server_state.process = None;
                 server_state.port = None;
+                drop(server_state);
+
+                // Kill and reap all PTY child processes (dropping them does not kill them)
+                let pty_state = window.app_handle().state::<SharedPtyState>();
+                pty_state.lock().kill_all();
             }
         })
         // Register asset protocol to serve local files
@@ -2643,15 +2809,8 @@ pub fn run() {
             let allowed = {
                 let mut is_allowed = false;
                 // Check vault path from settings
-                let settings_path = get_settings_path(&app);
-                if let Ok(content) = fs::read_to_string(&settings_path) {
-                    if let Ok(settings) = serde_json::from_str::<AppSettings>(&content) {
-                        if let Some(ref vault) = settings.vault_path {
-                            if let Ok(vault_canonical) = Path::new(vault).canonicalize() {
-                                is_allowed = canonical.starts_with(&vault_canonical);
-                            }
-                        }
-                    }
+                if let Some(vault_canonical) = get_configured_vault(&app) {
+                    is_allowed = canonical.starts_with(&vault_canonical);
                 }
                 // Also allow config directory access (for app assets)
                 let config_dir = get_config_dir_with_app(&app);
