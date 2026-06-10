@@ -7,6 +7,7 @@
 import { Component, createSignal, createEffect, onMount, onCleanup, For, Show } from 'solid-js';
 import { platform } from '@platform';
 import { escapeHtml, escapeHtmlAttr, sanitizeUrl, unescapeHtml } from '../lib/security';
+import { getCustomProviderApiKey } from '../lib/ai-credentials';
 
 // --- Types ---
 
@@ -103,9 +104,9 @@ const CustomProviderChat: Component<CustomProviderChatProps> = (props) => {
   let messagesEndRef: HTMLDivElement | undefined;
   let streamCleanup: (() => void) | null = null;
 
-  const getConfig = () => {
+  const getConfig = async () => {
     const url = localStorage.getItem('custom_provider_url') || '';
-    const apiKey = localStorage.getItem('custom_provider_api_key') || '';
+    const apiKey = (await getCustomProviderApiKey()) || '';
     const model = selectedModel();
     return { url, apiKey, model };
   };
@@ -213,7 +214,7 @@ const CustomProviderChat: Component<CustomProviderChatProps> = (props) => {
   // --- Streaming ---
 
   const streamCompletion = async (apiMessages: Array<{ role: string; content: string }>): Promise<string> => {
-    const { url, apiKey, model } = getConfig();
+    const { url, apiKey, model } = await getConfig();
     const baseUrl = url.replace(/\/+$/, '');
     const fullUrl = `${baseUrl}/v1/chat/completions`;
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -292,7 +293,7 @@ const CustomProviderChat: Component<CustomProviderChatProps> = (props) => {
     const text = inputText().trim();
     if (!text || isStreaming()) return;
 
-    const { url } = getConfig();
+    const { url } = await getConfig();
     if (!url) {
       setError('Custom provider is not configured. Please configure it in Settings.');
       return;

@@ -18,9 +18,41 @@ const platformEntry =
     ? path.resolve(__dirname, 'src/platform/web/index.ts')
     : path.resolve(__dirname, 'src/platform/tauri/index.ts');
 
+// The Tauri build gets its CSP from tauri.conf.json; the web build needs its own.
+// Injected only into production builds so the dev server (HMR websocket, inline
+// preamble) keeps working.
+const WEB_CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'wasm-unsafe-eval'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' https: data: blob:",
+  "media-src 'self' https: blob:",
+  "connect-src 'self' https: wss: blob:",
+  "worker-src 'self' blob:",
+  "font-src 'self' data:",
+  "object-src 'none'",
+  "frame-src 'none'",
+  "base-uri 'self'",
+].join('; ');
+
+const webCspPlugin = () => ({
+  name: 'onyx-web-csp',
+  apply: 'build' as const,
+  transformIndexHtml() {
+    return [
+      {
+        tag: 'meta',
+        attrs: { 'http-equiv': 'Content-Security-Policy', content: WEB_CSP },
+        injectTo: 'head-prepend' as const,
+      },
+    ];
+  },
+});
+
 const webPlugins =
   BUILD_TARGET === 'web'
     ? [
+        webCspPlugin(),
         VitePWA({
           registerType: 'autoUpdate',
           includeAssets: ['icons/icon.png', 'icons/128x128.png', 'icons/128x128@2x.png'],

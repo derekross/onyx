@@ -1,9 +1,11 @@
-import { Component, createSignal, For, onMount } from 'solid-js';
+import { Component, createSignal, For, onMount, onCleanup } from 'solid-js';
 import { platform } from '@platform';
 import type { SearchResult } from '@platform';
+import { searchFileContents } from '../lib/editor/note-index';
 
 interface SearchPanelProps {
   vaultPath: string | null;
+  fileContents?: Map<string, string>;
   onSelect: (path: string) => void;
   onClose: () => void;
 }
@@ -14,9 +16,15 @@ const SearchPanel: Component<SearchPanelProps> = (props) => {
   const [isSearching, setIsSearching] = createSignal(false);
   let inputRef: HTMLInputElement | undefined;
   let searchTimeout: number | null = null;
+  let searchRequestId = 0;
 
   onMount(() => {
     inputRef?.focus();
+  });
+
+  onCleanup(() => {
+    if (searchTimeout) clearTimeout(searchTimeout);
+    searchRequestId++; // discard any in-flight fallback search
   });
 
   const performSearch = async (searchQuery: string) => {
@@ -25,15 +33,25 @@ const SearchPanel: Component<SearchPanelProps> = (props) => {
       return;
     }
 
+    const requestId = ++searchRequestId;
+
+    // Fast path: search the in-memory content cache (zero IPC)
+    const contents = props.fileContents;
+    if (contents && contents.size > 0) {
+      setResults(searchFileContents(contents, searchQuery));
+      return;
+    }
+
+    // Fallback: cache not loaded yet (e.g. during startup) — use platform search
     setIsSearching(true);
     try {
       const searchResults = await platform.search.searchVault(props.vaultPath, searchQuery);
-      setResults(searchResults);
+      if (requestId === searchRequestId) setResults(searchResults);
     } catch (err) {
       console.error('Search failed:', err);
-      setResults([]);
+      if (requestId === searchRequestId) setResults([]);
     } finally {
-      setIsSearching(false);
+      if (requestId === searchRequestId) setIsSearching(false);
     }
   };
 

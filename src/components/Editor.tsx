@@ -4,7 +4,7 @@ import { commonmark, remarkPreserveEmptyLinePlugin } from '@milkdown/preset-comm
 import { gfm } from '@milkdown/preset-gfm';
 import { nord } from '@milkdown/theme-nord';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
-import { TextSelection } from '@milkdown/prose/state';
+import { TextSelection, EditorState } from '@milkdown/prose/state';
 import { platform } from '@platform';
 // Note: dragDropEnabled is false in tauri.conf.json so HTML5 drag events
 // work on Windows (WebView2 native handler blocks them otherwise).
@@ -377,43 +377,114 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
         if (filePath && filePath !== currentPath() && containerRef) {
           setCurrentPath(filePath);
 
-          // Remove old scroll listener before destroying editor
-          if (scrollHandler && editorInstance?.ctx) {
+          // Fast path: reuse the existing editor instance and swap the
+          // document in place. This avoids destroying/recreating ~15 plugins
+          // and re-mounting the view on every tab switch (100-300ms of lag).
+          let swapped = false;
+          if (editorInstance?.ctx) {
             try {
-              const view = editorInstance.ctx.get(editorViewCtx);
-              view.dom.removeEventListener('scroll', scrollHandler, true);
-            } catch (e) {
-              // Ignore errors if view is already destroyed
+              const ctx = editorInstance.ctx;
+              const view = ctx.get(editorViewCtx);
+
+              // Only swap when the editor view is still attached to the DOM.
+              // A view-mode toggle (live <-> source) replaces the container
+              // element, in which case we must fall back to a full recreate.
+              if (view.dom.isConnected) {
+                // Refresh per-file plugin context. All of these are lazy
+                // module-level globals (read at interaction/render time, not
+                // captured at editor creation), so updating the setters is
+                // sufficient — mirrors what createEditor() does.
+                setHashtagClickHandler(props.onHashtagClick || null);
+                setWikilinkClickHandler(props.onWikilinkClick || null);
+                setWikilinkNoteIndex(props.noteIndex || null);
+                setEmbedAssetIndex(props.assetIndex || null);
+                setEmbedNoteIndex(props.noteIndex || null);
+                setEmbedVaultPath(props.vaultPath || null);
+                setEmbedCurrentFilePath(filePath);
+                setAutocompleteContext(props.vaultPath || null, filePath, props.fileContents);
+                setUploadVaultPath(props.vaultPath || null);
+                setOnFilesUploaded(props.onFilesUploaded || null);
+
+                // Parse the new file's markdown with the existing parser
+                const parser = ctx.get(parserCtx);
+                const doc = parser(props.content);
+                if (!doc) {
+                  throw new Error('Parser returned no document');
+                }
+
+                // Create a brand-new EditorState instead of dispatching a
+                // replace transaction: this resets prosemirror-history so
+                // Ctrl+Z cannot restore the previous file's content, while
+                // keeping the same plugin instances and view (incl. scroll
+                // and drop listeners attached to view.dom).
+                view.updateState(
+                  EditorState.create({
+                    doc,
+                    schema: view.state.schema,
+                    plugins: view.state.plugins,
+                  })
+                );
+
+                // updateState doesn't dispatch a transaction, so the
+                // markdownUpdated listener won't fire — sync tracking
+                // manually so the external-content effect stays quiet.
+                lastEditorContent = props.content;
+
+                // Reset scroll position for the new document
+                view.dom.scrollTop = 0;
+
+                // Export headings for the new document (recomputed by the
+                // heading plugin's state.init during EditorState.create)
+                const headings = headingPluginKey.getState(view.state) || [];
+                props.onHeadingsChange?.(headings);
+
+                swapped = true;
+              }
+            } catch (err) {
+              console.warn('[Editor] Doc swap failed, falling back to full recreate:', err);
             }
           }
 
-          // Always recreate editor on tab switch for reliability
-          // Destroy existing instance first
-          if (editorInstance) {
-            await editorInstance.destroy();
-            editorInstance = null;
-          }
+          if (!swapped) {
+            // Fallback / initial path: full editor recreate.
 
-          // Clear the container DOM to prevent duplicate content
-          // Milkdown's destroy() doesn't always clean up the DOM fully
-          if (containerRef) {
-            containerRef.innerHTML = '';
-          }
+            // Remove old scroll listener before destroying editor
+            if (scrollHandler && editorInstance?.ctx) {
+              try {
+                const view = editorInstance.ctx.get(editorViewCtx);
+                view.dom.removeEventListener('scroll', scrollHandler, true);
+              } catch (e) {
+                // Ignore errors if view is already destroyed
+              }
+            }
 
-          // Create fresh editor with new content
-          const editor = await createEditor(containerRef, props.content);
+            // Destroy existing instance first
+            if (editorInstance) {
+              await editorInstance.destroy();
+              editorInstance = null;
+            }
 
-          // Set up scroll tracking for active heading after editor is created
-          if (editor?.ctx) {
-            const view = editor.ctx.get(editorViewCtx);
+            // Clear the container DOM to prevent duplicate content
+            // Milkdown's destroy() doesn't always clean up the DOM fully
+            if (containerRef) {
+              containerRef.innerHTML = '';
+            }
 
-            // Export initial headings
-            const initialHeadings = headingPluginKey.getState(view.state) || [];
-            props.onHeadingsChange?.(initialHeadings);
+            // Create fresh editor with new content
+            const editor = await createEditor(containerRef, props.content);
 
-            // Attach scroll listener
-            if (scrollHandler) {
-              view.dom.addEventListener('scroll', scrollHandler, true);
+            // Set up scroll tracking for active heading after editor is created
+            if (editor?.ctx) {
+              const view = editor.ctx.get(editorViewCtx);
+
+              // Export initial headings
+              const initialHeadings = headingPluginKey.getState(view.state) || [];
+              props.onHeadingsChange?.(initialHeadings);
+
+              // Attach scroll listener
+              if (scrollHandler) {
+                view.dom.addEventListener('scroll', scrollHandler, true);
+              }
             }
           }
 

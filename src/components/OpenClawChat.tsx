@@ -12,6 +12,7 @@ import { Component, createSignal, createEffect, onMount, onCleanup, For, Show } 
 import { platform } from '@platform';
 import type { FileEntry } from '@platform';
 import { escapeHtml, escapeHtmlAttr, sanitizeUrl, unescapeHtml } from '../lib/security';
+import { getOpenClawToken } from '../lib/ai-credentials';
 
 // --- Types ---
 
@@ -188,15 +189,16 @@ const OpenClawChat: Component<OpenClawChatProps> = (props) => {
   let messagesEndRef: HTMLDivElement | undefined;
   let streamCleanup: (() => void) | null = null;
 
-  const getConfig = () => {
+  const getConfig = async () => {
     const url = localStorage.getItem('openclaw_url') || '';
-    const token = localStorage.getItem('openclaw_token') || '';
+    const token = (await getOpenClawToken()) || '';
     return { url, token };
   };
 
   const checkConfiguration = () => {
-    const { url, token } = getConfig();
-    setIsConfigured(!!url && !!token);
+    void getConfig().then(({ url, token }) => {
+      setIsConfigured(!!url && !!token);
+    });
   };
 
   const hashContent = (content: string): string => {
@@ -430,7 +432,7 @@ const OpenClawChat: Component<OpenClawChatProps> = (props) => {
   // --- Streaming ---
 
   const streamCompletion = async (apiMessages: Array<{ role: string; content: string }>): Promise<string> => {
-    const { url, token } = getConfig();
+    const { url, token } = await getConfig();
     const baseUrl = url.replace(/\/+$/, '');
     const fullUrl = `${baseUrl}/v1/chat/completions`;
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -535,7 +537,7 @@ const OpenClawChat: Component<OpenClawChatProps> = (props) => {
     const text = inputText().trim();
     if (!text || isStreaming()) return;
 
-    const { url, token } = getConfig();
+    const { url, token } = await getConfig();
     if (!url || !token) {
       setError('OpenClaw is not configured. Please configure it in Settings.');
       return;

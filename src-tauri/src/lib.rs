@@ -1069,6 +1069,7 @@ fn get_registered_opencode_path(app: AppHandle) -> Option<String> {
 mod opencode_installer {
     use super::*;
     use futures_util::StreamExt;
+    use sha2::{Digest, Sha256};
     use std::io::Write;
     use tauri::Emitter;
 
@@ -1185,10 +1186,11 @@ mod opencode_installer {
         get_opencode_binary_path().to_string_lossy().to_string()
     }
 
-    /// Get the download URL for the current platform
-    fn get_download_url() -> Result<String, String> {
-        let base_url = "https://github.com/anomalyco/opencode/releases/latest/download";
+    /// GitHub repository hosting OpenCode releases
+    const RELEASE_REPO: &str = "anomalyco/opencode";
 
+    /// Get the release asset name for the current platform
+    fn get_asset_name() -> Result<&'static str, String> {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         let asset = "opencode-darwin-arm64.zip";
 
@@ -1222,7 +1224,130 @@ mod opencode_installer {
             all(target_os = "linux", target_arch = "x86_64"),
             all(target_os = "linux", target_arch = "aarch64"),
         ))]
-        Ok(format!("{}/{}", base_url, asset))
+        Ok(asset)
+    }
+
+    /// A resolved download: a concrete asset URL plus, when available, the
+    /// expected SHA-256 of the asset for integrity verification.
+    struct ResolvedDownload {
+        url: String,
+        asset_name: String,
+        /// Lowercase hex SHA-256 the downloaded bytes must match, if known.
+        expected_sha256: Option<String>,
+    }
+
+    /// Extract the expected SHA-256 for an asset from GitHub release metadata.
+    ///
+    /// The upstream repo publishes no checksums.txt / SHASUMS / signature
+    /// assets, so the strongest available source is the `digest` field
+    /// ("sha256:<hex>") that GitHub computes server-side for every release
+    /// asset. If upstream ever publishes a dedicated checksums asset, add it
+    /// as an additional source here.
+    fn expected_sha256_from_asset(asset: &serde_json::Value) -> Option<String> {
+        asset
+            .get("digest")
+            .and_then(|d| d.as_str())
+            .and_then(|d| d.strip_prefix("sha256:"))
+            .map(|h| h.trim().to_ascii_lowercase())
+    }
+
+    /// Resolve the download for the current platform.
+    ///
+    /// Queries the GitHub releases API once so that the download URL and the
+    /// expected checksum come from the same pinned release (avoiding a race
+    /// against `releases/latest`). Falls back to the unverified
+    /// `releases/latest/download` URL if the API is unavailable, so installs
+    /// keep working offline from the metadata endpoint (e.g. rate limiting).
+    async fn resolve_download(client: &reqwest::Client) -> Result<ResolvedDownload, String> {
+        let asset_name = get_asset_name()?;
+        let fallback_url = format!(
+            "https://github.com/{}/releases/latest/download/{}",
+            RELEASE_REPO, asset_name
+        );
+
+        let api_url = format!("https://api.github.com/repos/{}/releases/latest", RELEASE_REPO);
+        let release: Option<serde_json::Value> = match client
+            .get(&api_url)
+            .header("User-Agent", "onyx-opencode-installer")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                Ok(body) => serde_json::from_slice(&body).ok(),
+                Err(e) => {
+                    log::warn!("OpenCode installer: failed to read release metadata: {}", e);
+                    None
+                }
+            },
+            Ok(resp) => {
+                log::warn!(
+                    "OpenCode installer: release metadata request returned {}",
+                    resp.status()
+                );
+                None
+            }
+            Err(e) => {
+                log::warn!("OpenCode installer: failed to fetch release metadata: {}", e);
+                None
+            }
+        };
+
+        if let Some(release) = release {
+            let tag = release
+                .get("tag_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+
+            let asset = release
+                .get("assets")
+                .and_then(|a| a.as_array())
+                .and_then(|assets| {
+                    assets.iter().find(|a| {
+                        a.get("name").and_then(|n| n.as_str()) == Some(asset_name)
+                    })
+                });
+
+            if let Some(asset) = asset {
+                let url = asset
+                    .get("browser_download_url")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| fallback_url.clone());
+
+                let expected_sha256 = expected_sha256_from_asset(asset);
+                match &expected_sha256 {
+                    Some(digest) => log::info!(
+                        "OpenCode installer: resolved release {} asset {} with expected SHA-256 {}",
+                        tag, asset_name, digest
+                    ),
+                    None => log::warn!(
+                        "OpenCode installer: release {} provides no SHA-256 digest for {}; integrity verification will be skipped",
+                        tag, asset_name
+                    ),
+                }
+
+                return Ok(ResolvedDownload {
+                    url,
+                    asset_name: asset_name.to_string(),
+                    expected_sha256,
+                });
+            }
+
+            log::warn!(
+                "OpenCode installer: asset {} not found in release {}; falling back to latest/download",
+                asset_name, tag
+            );
+        }
+
+        log::warn!(
+            "OpenCode installer: could not resolve release metadata; no checksum available, skipping integrity verification for this install"
+        );
+        Ok(ResolvedDownload {
+            url: fallback_url,
+            asset_name: asset_name.to_string(),
+            expected_sha256: None,
+        })
     }
 
     /// Extract a .tar.gz archive
@@ -1289,7 +1414,6 @@ mod opencode_installer {
     /// Download and install OpenCode
     #[tauri::command]
     pub async fn install_opencode(app: AppHandle) -> Result<String, String> {
-        let download_url = get_download_url()?;
         let install_dir = get_default_install_dir();
         let binary_path = get_opencode_binary_path();
 
@@ -1309,9 +1433,14 @@ mod opencode_installer {
         fs::create_dir_all(&install_dir)
             .map_err(|e| format!("Failed to create install directory: {}", e))?;
 
+        // Resolve the release asset and its expected checksum from the same
+        // pinned release before downloading anything
+        let client = reqwest::Client::new();
+        let resolved = resolve_download(&client).await?;
+
         // Create temp file for download
         let temp_dir = std::env::temp_dir();
-        let archive_name = download_url.split('/').last().unwrap_or("opencode.archive");
+        let archive_name = resolved.asset_name.as_str();
         let archive_path = temp_dir.join(archive_name);
 
         // Download the archive
@@ -1326,9 +1455,8 @@ mod opencode_installer {
             },
         );
 
-        let client = reqwest::Client::new();
         let response = client
-            .get(&download_url)
+            .get(&resolved.url)
             .send()
             .await
             .map_err(|e| format!("Failed to download: {}", e))?;
@@ -1341,6 +1469,7 @@ mod opencode_installer {
         let mut downloaded: u64 = 0;
         let mut file = fs::File::create(&archive_path)
             .map_err(|e| format!("Failed to create temp file: {}", e))?;
+        let mut hasher = Sha256::new();
 
         let mut stream = response.bytes_stream();
 
@@ -1348,6 +1477,7 @@ mod opencode_installer {
             let chunk = chunk.map_err(|e| format!("Download error: {}", e))?;
             file.write_all(&chunk)
                 .map_err(|e| format!("Failed to write: {}", e))?;
+            hasher.update(&chunk);
             downloaded += chunk.len() as u64;
 
             let progress = if let Some(total) = total_size {
@@ -1379,6 +1509,44 @@ mod opencode_installer {
         }
 
         drop(file);
+
+        // Verify download integrity against the checksum from the release
+        // metadata before extracting or executing anything
+        let _ = app.emit(
+            "opencode-install-progress",
+            InstallProgress {
+                stage: "verifying".to_string(),
+                progress: 75,
+                bytes_downloaded: None,
+                total_bytes: None,
+                message: "Verifying download integrity...".to_string(),
+            },
+        );
+
+        let actual_sha256 = format!("{:x}", hasher.finalize());
+        match &resolved.expected_sha256 {
+            Some(expected) => {
+                if &actual_sha256 != expected {
+                    let _ = fs::remove_file(&archive_path);
+                    return Err(format!(
+                        "Integrity verification failed for {}: expected SHA-256 {}, got {}. \
+                         The download may be corrupted or tampered with; installation aborted.",
+                        archive_name, expected, actual_sha256
+                    ));
+                }
+                log::info!(
+                    "OpenCode installer: verified SHA-256 of {} ({})",
+                    archive_name, actual_sha256
+                );
+            }
+            None => {
+                log::warn!(
+                    "OpenCode installer: upstream publishes no checksums for this download; \
+                     skipping integrity verification for {} (downloaded SHA-256: {})",
+                    archive_name, actual_sha256
+                );
+            }
+        }
 
         // Extract the archive
         let _ = app.emit(

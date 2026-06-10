@@ -2,6 +2,7 @@ import { Component, createSignal, createEffect, For, Show, onMount, onCleanup } 
 import { platform } from '@platform';
 import type { FileEntry } from '@platform';
 import { isMobile } from '../lib/platform';
+import { searchFileContents } from '../lib/editor/note-index';
 
 /**
  * Get the parent directory of a path, handling both / and \ separators (Windows compatibility).
@@ -45,6 +46,8 @@ interface SidebarProps {
   // External expanded folders state (for session persistence)
   expandedFolders?: Set<string>;
   onExpandedFoldersChange?: (folders: Set<string>) => void;
+  // In-memory cache of all .md contents (path -> content) for zero-IPC search
+  fileContents?: Map<string, string>;
 }
 
 interface SearchResult {
@@ -540,21 +543,32 @@ const Sidebar: Component<SidebarProps> = (props) => {
   };
 
   // Search functionality
+  let searchRequestId = 0;
   const performSearch = async (query: string) => {
     if (!query.trim() || !props.vaultPath) {
       setSearchResults([]);
       return;
     }
 
+    const requestId = ++searchRequestId;
+
+    // Fast path: search the in-memory content cache (zero IPC)
+    const contents = props.fileContents;
+    if (contents && contents.size > 0) {
+      setSearchResults(searchFileContents(contents, query.trim()));
+      return;
+    }
+
+    // Fallback: cache not loaded yet (e.g. during startup) — use platform search
     setIsSearching(true);
     try {
       const results = await platform.search.searchVault(props.vaultPath, query.trim());
-      setSearchResults(results);
+      if (requestId === searchRequestId) setSearchResults(results);
     } catch (err) {
       console.error('Search failed:', err);
-      setSearchResults([]);
+      if (requestId === searchRequestId) setSearchResults([]);
     } finally {
-      setIsSearching(false);
+      if (requestId === searchRequestId) setIsSearching(false);
     }
   };
 
@@ -567,6 +581,11 @@ const Sidebar: Component<SidebarProps> = (props) => {
       performSearch(value);
     }, 300);
   };
+
+  onCleanup(() => {
+    if (searchTimeout) clearTimeout(searchTimeout);
+    searchRequestId++; // discard any in-flight fallback search
+  });
 
   const FileTreeItem: Component<{ entry: FileEntry; depth: number }> = (itemProps) => {
     const isExpanded = () => expandedFolders().has(itemProps.entry.path);

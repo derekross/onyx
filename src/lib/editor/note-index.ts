@@ -305,36 +305,15 @@ export function extractLinksFromContent(content: string): string[] {
 }
 
 /**
- * Build a graph of all notes and their connections
- *
- * @param vaultPath - Root path of the vault
- * @param noteIndex - The built note index
- * @param readFile - Function to read file content (passed from caller to avoid Tauri dependency)
+ * Read file contents for a set of paths with bounded concurrency.
+ * IPC reads are the dominant cost on large vaults, so 16 reads run in parallel.
+ * Files that fail to read are skipped (with a console warning).
  */
-export async function buildNoteGraph(
-  vaultPath: string,
-  noteIndex: NoteIndex,
-  readFile: (path: string) => Promise<string>
-): Promise<NoteGraph> {
-  const nodes: Map<string, NoteNode> = new Map();
-  const links: NoteLink[] = [];
-  const incomingCounts: Map<string, number> = new Map();
-
-  // Initialize all notes as nodes
-  for (const path of noteIndex.allPaths) {
-    const baseName = getBaseName(path);
-    nodes.set(path, {
-      id: path,
-      name: baseName,
-      incomingCount: 0,
-      outgoingCount: 0,
-    });
-  }
-
-  // Read all note contents with bounded concurrency — serial one-at-a-time
-  // IPC reads are the dominant cost on large vaults.
-  const contents = new Map<string, string>();
-  const paths = [...noteIndex.allPaths];
+export async function readContentsParallel(
+  paths: string[],
+  readFile: (path: string) => Promise<string>,
+  contents: Map<string, string> = new Map()
+): Promise<Map<string, string>> {
   const CONCURRENCY = 16;
   let nextIndex = 0;
   await Promise.all(
@@ -350,9 +329,40 @@ export async function buildNoteGraph(
       }
     })
   );
+  return contents;
+}
+
+/**
+ * Build a graph of all notes and their connections from already-loaded
+ * file contents. Purely in-memory — performs no I/O, so callers that keep
+ * a persistent content cache can rebuild the graph cheaply.
+ *
+ * @param vaultPath - Root path of the vault
+ * @param noteIndex - The built note index
+ * @param contents - Map of note path -> markdown content (paths missing from the map are skipped)
+ */
+export function buildNoteGraphFromContents(
+  vaultPath: string,
+  noteIndex: NoteIndex,
+  contents: Map<string, string>
+): NoteGraph {
+  const nodes: Map<string, NoteNode> = new Map();
+  const links: NoteLink[] = [];
+  const incomingCounts: Map<string, number> = new Map();
+
+  // Initialize all notes as nodes
+  for (const path of noteIndex.allPaths) {
+    const baseName = getBaseName(path);
+    nodes.set(path, {
+      id: path,
+      name: baseName,
+      incomingCount: 0,
+      outgoingCount: 0,
+    });
+  }
 
   // Process each note to extract links
-  for (const sourcePath of paths) {
+  for (const sourcePath of noteIndex.allPaths) {
     const content = contents.get(sourcePath);
     if (content === undefined) continue;
     const linkTargets = extractLinksFromContent(content);
@@ -395,6 +405,74 @@ export async function buildNoteGraph(
     nodes: Array.from(nodes.values()),
     links,
   };
+}
+
+/**
+ * Build a graph of all notes and their connections, reading every note's
+ * content via the provided readFile. Prefer buildNoteGraphFromContents when
+ * contents are already cached in memory.
+ *
+ * @param vaultPath - Root path of the vault
+ * @param noteIndex - The built note index
+ * @param readFile - Function to read file content (passed from caller to avoid Tauri dependency)
+ */
+export async function buildNoteGraph(
+  vaultPath: string,
+  noteIndex: NoteIndex,
+  readFile: (path: string) => Promise<string>
+): Promise<NoteGraph> {
+  const contents = await readContentsParallel([...noteIndex.allPaths], readFile);
+  return buildNoteGraphFromContents(vaultPath, noteIndex, contents);
+}
+
+// ============================================================================
+// In-Memory Vault Search
+// ============================================================================
+
+export interface ContentSearchMatch {
+  line: number;
+  content: string;
+}
+
+export interface ContentSearchResult {
+  path: string;
+  name: string;
+  matches: ContentSearchMatch[];
+}
+
+/**
+ * Search already-loaded file contents for a query string (case-insensitive
+ * substring match, line by line). Mirrors the Rust `search_files` command's
+ * behavior and limits (50 results, 5 matches per file, 100-char snippets)
+ * but performs zero I/O.
+ */
+export function searchFileContents(
+  contents: Map<string, string>,
+  query: string,
+  maxResults: number = 50,
+  maxMatchesPerFile: number = 5
+): ContentSearchResult[] {
+  if (!query.trim()) return [];
+  const needle = query.toLowerCase();
+  const results: ContentSearchResult[] = [];
+
+  for (const [path, content] of contents) {
+    const matches: ContentSearchMatch[] = [];
+    const lines = content.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].toLowerCase().includes(needle)) {
+        matches.push({ line: i + 1, content: lines[i].slice(0, 100) });
+        if (matches.length >= maxMatchesPerFile) break;
+      }
+    }
+    if (matches.length > 0) {
+      const parts = path.split(PATH_SEP_REGEX);
+      results.push({ path, name: parts[parts.length - 1], matches });
+      if (results.length >= maxResults) break;
+    }
+  }
+
+  return results;
 }
 
 /**

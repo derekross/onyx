@@ -28,12 +28,13 @@ import Onboarding, { type OnboardingResult } from './components/Onboarding';
 import UnlockDialog from './components/UnlockDialog';
 import { MobileHeader, MobileNav, MobileDrawer, type MobileNavTab } from './components/mobile';
 import { initPlatform, usePlatformInfo, isWeb } from './lib/platform';
+import { getOpenClawToken } from './lib/ai-credentials';
 import { impactLight, impactMedium, notificationSuccess, notificationError } from './lib/haptics';
 import { platform } from '@platform';
 import { getSyncEngine, getCurrentLogin, calculateChecksum } from './lib/nostr';
 import { getSignerFromStoredLogin } from './lib/nostr/signer';
 import { sanitizeFilePath } from './lib/security';
-import { buildNoteIndex, resolveWikilink, NoteIndex, NoteGraph, buildNoteGraph } from './lib/editor/note-index';
+import { buildNoteIndex, resolveWikilink, NoteIndex, NoteGraph, buildNoteGraphFromContents, readContentsParallel } from './lib/editor/note-index';
 import { openDailyNote, loadDailyNotesConfig } from './lib/daily-notes';
 import { listTemplates, getTemplateContent, createNoteFromTemplate, loadTemplatesConfig, type TemplateInfo } from './lib/templates';
 import { HeadingInfo } from './lib/editor/heading-plugin';
@@ -541,6 +542,10 @@ const App: Component = () => {
           }
         }
       }
+
+      // Update the in-memory content cache for the modified files and rebuild
+      // the note graph from memory (reads only the modified paths, not the vault)
+      refreshContentsForPaths(modifiedPaths);
     }).then(unlisten => {
       unlistenFileModified = unlisten;
     }).catch(err => {
@@ -1103,32 +1108,114 @@ const App: Component = () => {
     localStorage.setItem('session_state', JSON.stringify(sessionState));
   });
 
+  // ---------------------------------------------------------------------
+  // Incremental note graph + persistent file-content cache for backlinks
+  //
+  // fileContents is a persistent cache of all .md contents. Graph rebuilds
+  // run from the in-memory map; disk reads (IPC) happen only for paths that
+  // are new/modified. All cache mutations are serialized through a promise
+  // chain so concurrent triggers (index rebuilds, file-modified events,
+  // auto-saves) can't clobber each other, and a generation counter discards
+  // work queued before the vault was closed/cleared.
+  // ---------------------------------------------------------------------
+  let graphSyncGeneration = 0;
+  let graphSyncChain: Promise<void> = Promise.resolve();
+  const queueGraphSync = (work: () => Promise<void>) => {
+    graphSyncChain = graphSyncChain
+      .then(work)
+      .catch(err => console.error('Failed to build note graph:', err));
+  };
+
+  // Full sync: diff the index against the cache, read only missing files,
+  // drop deleted ones, then rebuild the graph entirely from memory.
+  const syncGraphWithIndex = (index: NoteIndex, vault: string) => {
+    const gen = graphSyncGeneration;
+    queueGraphSync(async () => {
+      if (gen !== graphSyncGeneration) return;
+      const cache = new Map(fileContents());
+
+      // Drop cache entries for files no longer in the index
+      for (const path of cache.keys()) {
+        if (!index.allPaths.has(path)) cache.delete(path);
+      }
+
+      // Read only paths missing from the cache (16-way parallel; on initial
+      // load this reads everything, afterwards just new files)
+      const missing = [...index.allPaths].filter(p => !cache.has(p));
+      if (missing.length > 0) {
+        await readContentsParallel(missing, (path) => platform.vault.read(path, vault), cache);
+      }
+
+      if (gen !== graphSyncGeneration || vaultPath() !== vault) return;
+      setFileContents(cache);
+      setNoteGraph(buildNoteGraphFromContents(vault, index, cache));
+    });
+  };
+
+  // Targeted refresh: re-read specific files (modified on disk), update the
+  // cache, and rebuild the graph from memory — no full-vault reads.
+  const refreshContentsForPaths = (paths: string[]) => {
+    const gen = graphSyncGeneration;
+    queueGraphSync(async () => {
+      if (gen !== graphSyncGeneration) return;
+      const vault = vaultPath();
+      const index = noteIndex();
+      if (!vault || !index) return;
+
+      const mdPaths = paths.filter(p => /\.md$/i.test(p));
+      if (mdPaths.length === 0) return;
+
+      const cache = new Map(fileContents());
+      let changed = false;
+      for (const path of mdPaths) {
+        try {
+          const content = await platform.vault.read(path, vault);
+          if (cache.get(path) !== content) {
+            cache.set(path, content);
+            changed = true;
+          }
+        } catch {
+          // File may have been deleted — drop it from the cache
+          if (cache.delete(path)) changed = true;
+        }
+      }
+
+      if (!changed || gen !== graphSyncGeneration || vaultPath() !== vault) return;
+      setFileContents(cache);
+      setNoteGraph(buildNoteGraphFromContents(vault, index, cache));
+    });
+  };
+
+  // Zero-IPC refresh: update the cache for a path from content we already
+  // have in memory (e.g. just-saved tab content) and rebuild the graph.
+  const updateCachedContent = (path: string, content: string) => {
+    if (!/\.md$/i.test(path)) return;
+    const gen = graphSyncGeneration;
+    queueGraphSync(async () => {
+      if (gen !== graphSyncGeneration) return;
+      const vault = vaultPath();
+      const index = noteIndex();
+      if (!vault || !index) return;
+
+      const cache = new Map(fileContents());
+      if (cache.get(path) === content) return;
+      cache.set(path, content);
+      setFileContents(cache);
+      setNoteGraph(buildNoteGraphFromContents(vault, index, cache));
+    });
+  };
+
   // Build note graph and cache file contents for backlinks
-  createEffect(async () => {
+  createEffect(() => {
     const index = noteIndex();
     const vault = vaultPath();
     if (!index || !vault) {
+      graphSyncGeneration++; // invalidate any queued/in-flight sync work
       setNoteGraph(null);
       setFileContents(new Map());
       return;
     }
-
-    try {
-      const contents = new Map<string, string>();
-
-      // Read all files and cache contents
-      const readFile = async (path: string) => {
-        const content = await platform.vault.read(path, vaultPath() ?? '');
-        contents.set(path, content);
-        return content;
-      };
-
-      const graph = await buildNoteGraph(vault, index, readFile);
-      setNoteGraph(graph);
-      setFileContents(contents);
-    } catch (err) {
-      console.error('Failed to build note graph:', err);
-    }
+    syncGraphWithIndex(index, vault);
   });
 
   // Clear headings when switching tabs
@@ -1271,6 +1358,8 @@ const App: Component = () => {
       const content = tab.content.replace(/\\([[\]_!])/g, '$1');
       await platform.vault.write(tab.path, content, vaultPath() ?? '');
       setTabs(tabs().map((t, i) => i === index ? { ...t, content, isDirty: false } : t));
+      // Keep the backlinks/graph content cache fresh without any disk read
+      updateCachedContent(tab.path, content);
     } catch (err) {
       console.error('Failed to save:', err);
     }
@@ -2459,6 +2548,7 @@ const App: Component = () => {
             onPostToNostr={handlePostToNostr}
             expandedFolders={expandedFolders()}
             onExpandedFoldersChange={setExpandedFolders}
+            fileContents={fileContents()}
           />
         </MobileDrawer>
       </Show>
@@ -2568,9 +2658,9 @@ const App: Component = () => {
         <Show when={!isMobileApp() && !isWeb() && openClawEnabled()}>
           <button
             class={`icon-btn openclaw-icon ${showOpenClaw() ? 'active' : ''}`}
-            onClick={() => {
+            onClick={async () => {
               const url = localStorage.getItem('openclaw_url');
-              const token = localStorage.getItem('openclaw_token');
+              const token = await getOpenClawToken();
               if (!url || !token) {
                 setSettingsSection('openclaw');
                 setShowSettings(true);
@@ -2665,6 +2755,7 @@ const App: Component = () => {
             onPostToNostr={handlePostToNostr}
             expandedFolders={expandedFolders()}
             onExpandedFoldersChange={setExpandedFolders}
+            fileContents={fileContents()}
           />
         </div>
         <div
@@ -2838,25 +2929,9 @@ const App: Component = () => {
                 onBacklinkClick={(path, line) => openFile(path, line)}
                 onClose={() => setShowBacklinks(false)}
                 onLinkMention={async (sourcePath) => {
-                  // Refresh the file contents for the modified file
-                  try {
-                    const newContent = await platform.vault.read(sourcePath, vaultPath() ?? '');
-                    const newContents = new Map(fileContents());
-                    newContents.set(sourcePath, newContent);
-                    setFileContents(newContents);
-
-                    // Rebuild the graph with updated content
-                    const index = noteIndex();
-                    const vault = vaultPath();
-                    if (index && vault) {
-                      const graph = await buildNoteGraph(vault, index, async (path: string) => {
-                        return newContents.get(path) || await platform.vault.read(path, vaultPath() ?? '');
-                      });
-                      setNoteGraph(graph);
-                    }
-                  } catch (err) {
-                    console.error('Failed to refresh after linking:', err);
-                  }
+                  // Re-read just the modified file, update the content cache,
+                  // and rebuild the graph from memory
+                  refreshContentsForPaths([sourcePath]);
                 }}
               />
             </div>
@@ -3197,6 +3272,7 @@ const App: Component = () => {
       <Show when={showSearch()}>
         <SearchPanel
           vaultPath={vaultPath()}
+          fileContents={fileContents()}
           onSelect={(path) => {
             openFile(path);
             setShowSearch(false);

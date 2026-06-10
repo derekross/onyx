@@ -1,4 +1,4 @@
-import { Component, createSignal, createEffect, onCleanup, For, Show } from 'solid-js';
+import { Component, createSignal, createEffect, createMemo, onCleanup, For, Show, untrack } from 'solid-js';
 import { platform } from '@platform';
 
 interface XlsxViewerProps {
@@ -12,11 +12,23 @@ interface SheetData {
   rows: string[][];
 }
 
+/** Rows rendered above/below the visible window to avoid blanking while scrolling. */
+const ROW_OVERSCAN = 20;
+/** Estimated row stride (13px text + 2*6px padding + collapsed 1px border); corrected by measurement. */
+const DEFAULT_ROW_HEIGHT = 28;
+
 const XlsxViewer: Component<XlsxViewerProps> = (props) => {
   const [sheets, setSheets] = createSignal<SheetData[]>([]);
   const [activeSheet, setActiveSheet] = createSignal(0);
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
+
+  // Virtualization state
+  const [scrollTop, setScrollTop] = createSignal(0);
+  const [viewportHeight, setViewportHeight] = createSignal(600);
+  const [rowHeight, setRowHeight] = createSignal(DEFAULT_ROW_HEIGHT);
+
+  let containerRef: HTMLDivElement | undefined;
 
   createEffect(() => {
     const filePath = props.path;
@@ -137,6 +149,77 @@ const XlsxViewer: Component<XlsxViewerProps> = (props) => {
 
   const currentSheet = () => sheets()[activeSheet()] || null;
 
+  // --- Windowed row rendering ---
+  const totalRows = createMemo(() => currentSheet()?.rows.length ?? 0);
+  const startIndex = createMemo(() =>
+    Math.max(0, Math.floor(scrollTop() / rowHeight()) - ROW_OVERSCAN)
+  );
+  const endIndex = createMemo(() =>
+    Math.min(totalRows(), Math.ceil((scrollTop() + viewportHeight()) / rowHeight()) + ROW_OVERSCAN)
+  );
+  const visibleRows = createMemo(() => {
+    const sheet = currentSheet();
+    return sheet ? sheet.rows.slice(startIndex(), endIndex()) : [];
+  });
+  const topSpacerHeight = () => startIndex() * rowHeight();
+  const bottomSpacerHeight = () => Math.max(0, (totalRows() - endIndex()) * rowHeight());
+  const columnCount = createMemo(() => {
+    const sheet = currentSheet();
+    if (!sheet) return 1;
+    return Math.max(sheet.headers.length, sheet.rows[0]?.length ?? 0) + 1;
+  });
+
+  // Scroll container: rAF-throttled passive scroll tracking + viewport size tracking
+  const setContainerRef = (el: HTMLDivElement) => {
+    containerRef = el;
+    let rafId: number | null = null;
+    const onScroll = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        setScrollTop(el.scrollTop);
+        setViewportHeight(el.clientHeight);
+      });
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    const resizeObserver = new ResizeObserver(() => setViewportHeight(el.clientHeight));
+    resizeObserver.observe(el);
+    requestAnimationFrame(() => setViewportHeight(el.clientHeight));
+    onCleanup(() => {
+      el.removeEventListener('scroll', onScroll);
+      resizeObserver.disconnect();
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      if (containerRef === el) containerRef = undefined;
+    });
+  };
+
+  // Reset scroll when the sheet (or workbook) changes
+  createEffect(() => {
+    activeSheet();
+    sheets();
+    if (containerRef) containerRef.scrollTop = 0;
+    setScrollTop(0);
+  });
+
+  // Measure the real row stride from rendered rows so spacer math matches actual layout
+  createEffect(() => {
+    const sheet = currentSheet();
+    if (!sheet || sheet.rows.length === 0) return;
+    requestAnimationFrame(() => {
+      if (!containerRef) return;
+      const rendered = containerRef.querySelectorAll('tbody tr[data-xlsx-row]');
+      let measured = 0;
+      if (rendered.length >= 2) {
+        measured = rendered[1].getBoundingClientRect().top - rendered[0].getBoundingClientRect().top;
+      } else if (rendered.length === 1) {
+        measured = rendered[0].getBoundingClientRect().height;
+      }
+      if (measured > 4 && Math.abs(measured - untrack(rowHeight)) > 0.5) {
+        setRowHeight(measured);
+      }
+    });
+  });
+
   return (
     <div class="xlsx-viewer">
       {loading() && (
@@ -163,7 +246,7 @@ const XlsxViewer: Component<XlsxViewerProps> = (props) => {
         </Show>
 
         {/* Table */}
-        <div class="xlsx-table-container">
+        <div class="xlsx-table-container" ref={setContainerRef}>
           <Show when={currentSheet()}>
             <table class="xlsx-table">
               <Show when={currentSheet()!.headers.length > 0}>
@@ -177,16 +260,32 @@ const XlsxViewer: Component<XlsxViewerProps> = (props) => {
                 </thead>
               </Show>
               <tbody>
-                <For each={currentSheet()!.rows}>
+                <Show when={topSpacerHeight() > 0}>
+                  <tr
+                    aria-hidden="true"
+                    style={{ height: `${topSpacerHeight()}px`, background: 'transparent' }}
+                  >
+                    <td colspan={columnCount()} style={{ padding: '0', border: 'none' }} />
+                  </tr>
+                </Show>
+                <For each={visibleRows()}>
                   {(row, rowIndex) => (
-                    <tr>
-                      <td class="xlsx-row-number">{rowIndex() + 1}</td>
+                    <tr data-xlsx-row>
+                      <td class="xlsx-row-number">{startIndex() + rowIndex() + 1}</td>
                       <For each={row}>
                         {(cell) => <td>{cell}</td>}
                       </For>
                     </tr>
                   )}
                 </For>
+                <Show when={bottomSpacerHeight() > 0}>
+                  <tr
+                    aria-hidden="true"
+                    style={{ height: `${bottomSpacerHeight()}px`, background: 'transparent' }}
+                  >
+                    <td colspan={columnCount()} style={{ padding: '0', border: 'none' }} />
+                  </tr>
+                </Show>
               </tbody>
             </table>
           </Show>

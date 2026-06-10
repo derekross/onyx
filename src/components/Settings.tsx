@@ -24,6 +24,14 @@ import {
 } from '../lib/nostr';
 import { createSignerFromLogin, type NostrSigner } from '../lib/nostr/signer';
 import {
+  getOpenClawToken,
+  setOpenClawToken as persistOpenClawToken,
+  clearOpenClawToken,
+  getCustomProviderApiKey,
+  setCustomProviderApiKey as persistCustomProviderApiKey,
+  clearCustomProviderApiKey,
+} from '../lib/ai-credentials';
+import {
   initClient,
   isServerRunning,
   getProviders,
@@ -265,9 +273,8 @@ const Settings: Component<SettingsProps> = (props) => {
   const [openClawUrl, setOpenClawUrl] = createSignal<string>(
     localStorage.getItem('openclaw_url') || ''
   );
-  const [openClawToken, setOpenClawToken] = createSignal<string>(
-    localStorage.getItem('openclaw_token') || ''
-  );
+  // Loaded async from the platform secret store in onMount
+  const [openClawToken, setOpenClawToken] = createSignal<string>('');
   const [openClawTokenVisible, setOpenClawTokenVisible] = createSignal(false);
   const [openClawTestStatus, setOpenClawTestStatus] = createSignal<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [openClawTestError, setOpenClawTestError] = createSignal<string | null>(null);
@@ -339,9 +346,13 @@ const Settings: Component<SettingsProps> = (props) => {
     window.dispatchEvent(new CustomEvent('openclaw-settings-changed'));
   };
 
-  const handleOpenClawTokenChange = (value: string) => {
+  const handleOpenClawTokenChange = async (value: string) => {
     setOpenClawToken(value);
-    localStorage.setItem('openclaw_token', value);
+    if (value) {
+      await persistOpenClawToken(value);
+    } else {
+      await clearOpenClawToken();
+    }
     window.dispatchEvent(new CustomEvent('openclaw-settings-changed'));
   };
 
@@ -375,9 +386,8 @@ const Settings: Component<SettingsProps> = (props) => {
   const [customProviderUrl, setCustomProviderUrl] = createSignal<string>(
     localStorage.getItem('custom_provider_url') || ''
   );
-  const [customProviderApiKey, setCustomProviderApiKey] = createSignal<string>(
-    localStorage.getItem('custom_provider_api_key') || ''
-  );
+  // Loaded async from the platform secret store in onMount
+  const [customProviderApiKey, setCustomProviderApiKey] = createSignal<string>('');
   const [customProviderName, setCustomProviderName] = createSignal<string>(
     localStorage.getItem('custom_provider_name') || ''
   );
@@ -403,9 +413,13 @@ const Settings: Component<SettingsProps> = (props) => {
     window.dispatchEvent(new CustomEvent('custom-provider-settings-changed'));
   };
 
-  const handleCustomProviderApiKeyChange = (value: string) => {
+  const handleCustomProviderApiKeyChange = async (value: string) => {
     setCustomProviderApiKey(value);
-    localStorage.setItem('custom_provider_api_key', value);
+    if (value) {
+      await persistCustomProviderApiKey(value);
+    } else {
+      await clearCustomProviderApiKey();
+    }
     window.dispatchEvent(new CustomEvent('custom-provider-settings-changed'));
   };
 
@@ -582,6 +596,15 @@ const Settings: Component<SettingsProps> = (props) => {
   onMount(async () => {
     // Get app version
     platform.app.getVersion().then(setAppVersion).catch(() => setAppVersion('unknown'));
+
+    // Load AI credentials from the platform secret store (migrates any
+    // legacy plaintext localStorage copies on first read)
+    getOpenClawToken()
+      .then((token) => setOpenClawToken(token || ''))
+      .catch(() => {});
+    getCustomProviderApiKey()
+      .then((key) => setCustomProviderApiKey(key || ''))
+      .catch(() => {});
 
     // Apply saved appearance settings on mount
     applyAppearanceSettings();

@@ -5,6 +5,7 @@
  */
 
 import { platform } from '@platform';
+import { getOpenClawToken } from '../ai-credentials';
 
 // --- Types ---
 
@@ -58,11 +59,11 @@ function httpToWsUrl(httpUrl: string): string {
     .replace(/\/+$/, '');
 }
 
-// --- Get config from localStorage ---
+// --- Get config (URL from localStorage, token from secret store) ---
 
-function getConfig(): { wsUrl: string; token: string } | null {
+async function getConfig(): Promise<{ wsUrl: string; token: string } | null> {
   const httpUrl = localStorage.getItem('openclaw_url');
-  const token = localStorage.getItem('openclaw_token');
+  const token = await getOpenClawToken();
   if (!httpUrl || !token) return null;
   return { wsUrl: httpToWsUrl(httpUrl), token };
 }
@@ -74,7 +75,7 @@ function getConfig(): { wsUrl: string; token: string } | null {
  * Handles full lifecycle: connect, handshake, request, response, disconnect.
  */
 async function gatewayRequest<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-  const config = getConfig();
+  const config = await getConfig();
   if (!config) throw new Error('OpenClaw is not configured');
 
   const result = await platform.ai.openClawGatewayRequest(
