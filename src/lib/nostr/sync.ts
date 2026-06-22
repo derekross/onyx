@@ -5,7 +5,7 @@
  * Supports both local signing (nsec) and remote signing (NIP-46 bunker).
  */
 
-import { SimplePool, finalizeEvent, nip44, nip19, nip17, type Event } from 'nostr-tools';
+import { SimplePool, finalizeEvent, nip44, nip19, nip17, type Event, type Filter } from 'nostr-tools';
 import { v4 as uuidv4 } from 'uuid';
 import { hexToBytes } from '@noble/hashes/utils.js';
 import {
@@ -1280,6 +1280,39 @@ export class SyncEngine {
   public getFileNaddr(d: string): string | null {
     if (!this.pubkey) return null;
     return this.encodeNaddr(KIND_FILE, this.pubkey, d, this.config.relays);
+  }
+
+  // ============================================
+  // Public event fetching (for embedded Nostr references)
+  // ============================================
+
+  /**
+   * Fetch a single event matching a filter, merging optional relay hints
+   * (from a nevent/nprofile/naddr) with the configured relays. Returns the
+   * newest matching event (relevant for addressable/replaceable events such
+   * as kind-30023 articles), or null if none arrive before the timeout.
+   *
+   * Public so the editor's Nostr-embed plugin can reuse the shared relay
+   * pool and the user's relay config rather than opening its own sockets.
+   */
+  public async fetchEventByFilter(filter: Filter, relayHints: string[] = []): Promise<Event | null> {
+    const relays = Array.from(new Set([...this.config.relays, ...relayHints])).slice(0, 12);
+    try {
+      const events = await this.pool.querySync(relays, filter, { maxWait: 5000 });
+      if (!events.length) return null;
+      return events.reduce((newest, ev) => (ev.created_at > newest.created_at ? ev : newest));
+    } catch (e) {
+      console.error('[SyncEngine] fetchEventByFilter failed:', e);
+      return null;
+    }
+  }
+
+  /**
+   * Fetch a user's kind-0 metadata event. Returns the raw event (the caller
+   * parses the JSON content), or null if not found.
+   */
+  public async fetchProfileEvent(pubkey: string, relayHints: string[] = []): Promise<Event | null> {
+    return this.fetchEventByFilter({ kinds: [0], authors: [pubkey], limit: 1 }, relayHints);
   }
 
   // ============================================

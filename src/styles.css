@@ -6239,6 +6239,206 @@ body {
 }
 
 /* ============================================================================
+   Nostr Embeds - rendered nostr: references (notes, articles, mentions)
+   ============================================================================ */
+
+.nostr-embed {
+  margin: 1em 0;
+  user-select: none;
+}
+
+.nostr-embed.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 12px;
+}
+
+/* Note card */
+.nostr-note {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.nostr-note-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.nostr-note-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--bg-tertiary);
+  flex-shrink: 0;
+}
+
+.nostr-note-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.nostr-note-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nostr-note-time {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.nostr-note-content {
+  padding: 12px 16px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.nostr-note-content a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.nostr-note-content a:hover {
+  text-decoration: underline;
+}
+
+.nostr-note-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 8px 0;
+  border-radius: 8px;
+}
+
+.nostr-inline-ref {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+/* Open-in-client link */
+.nostr-open-link {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  text-decoration: none;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.nostr-open-link:hover {
+  color: var(--accent);
+  background: var(--accent-muted);
+}
+
+/* Article card */
+.nostr-article {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.nostr-article:hover {
+  border-color: var(--accent);
+}
+
+.nostr-article-image {
+  width: 100%;
+  max-height: 200px;
+  object-fit: cover;
+  display: block;
+}
+
+.nostr-article-body {
+  padding: 12px 16px;
+}
+
+.nostr-article-title {
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.nostr-article-summary {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 8px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.nostr-article-byline {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Inline mention chip */
+.nostr-mention {
+  color: var(--accent);
+  background: var(--accent-muted);
+  padding: 1px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.nostr-mention:hover {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+/* Loading + broken states */
+.nostr-loading {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 13px;
+}
+
+.nostr-broken {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* ============================================================================
    Upload Progress Indicator - Drag-and-drop / Clipboard paste
    ============================================================================ */
 
