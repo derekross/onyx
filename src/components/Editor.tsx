@@ -27,6 +27,13 @@ import {
   setEmbedVaultPath,
   setEmbedCurrentFilePath,
 } from '../lib/editor/embed-plugin';
+import {
+  nostrEmbedSchema,
+  nostrEmbedView,
+  nostrMentionSchema,
+  nostrMentionView,
+  nostrProsePlugin,
+} from '../lib/editor/nostr-embed-plugin';
 import { highlightPlugin } from '../lib/editor/highlight-plugin';
 import { commentPlugin } from '../lib/editor/comment-plugin';
 import { calloutPlugin } from '../lib/editor/callout-plugin';
@@ -142,6 +149,11 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       .use(embedView)
       .use(embedInputRule)
       .use(embedProsePlugin)
+      .use(nostrEmbedSchema)
+      .use(nostrEmbedView)
+      .use(nostrMentionSchema)
+      .use(nostrMentionView)
+      .use(nostrProsePlugin)
       .use(vaultUploadPlugin) // Custom upload plugin for paste/drop
       .use(listener)
       .use(hashtagPlugin)
