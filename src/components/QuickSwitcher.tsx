@@ -78,6 +78,10 @@ const QuickSwitcher: Component<QuickSwitcherProps> = (props) => {
         props.onSelect(selected.path);
       }
     } else if (e.key === 'Escape') {
+      // Consume Escape so the OS default (e.g. exit native fullscreen on
+      // macOS) does not also fire while closing the dialog.
+      e.preventDefault();
+      e.stopPropagation();
       props.onClose();
     }
   };

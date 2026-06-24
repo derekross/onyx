@@ -65,6 +65,10 @@ const SearchPanel: Component<SearchPanelProps> = (props) => {
 
   const handleKeyDown = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
+      // Consume Escape so the OS default (e.g. exit native fullscreen on
+      // macOS) does not also fire while closing the dialog.
+      e.preventDefault();
+      e.stopPropagation();
       props.onClose();
     } else if (e.key === 'Enter') {
       performSearch(query());

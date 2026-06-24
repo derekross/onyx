@@ -1430,6 +1430,13 @@ const App: Component = () => {
         e.preventDefault();
         handleOpenTemplatesPicker();
       } else if (e.key === 'Escape') {
+        // Closing a modal with Escape must consume the event, otherwise the
+        // OS default (e.g. exiting native fullscreen on macOS) also fires.
+        // Only preventDefault when a modal is actually open so Escape keeps
+        // its normal behavior (IME cancel, etc.) when nothing is showing.
+        if (showQuickSwitcher() || showCommandPalette() || showSearch() || showTemplatesModal()) {
+          e.preventDefault();
+        }
         setShowQuickSwitcher(false);
         setShowCommandPalette(false);
         setShowSearch(false);
