@@ -37,6 +37,7 @@ import {
 import { highlightPlugin } from '../lib/editor/highlight-plugin';
 import { commentPlugin } from '../lib/editor/comment-plugin';
 import { calloutPlugin } from '../lib/editor/callout-plugin';
+import { historyPlugin, historyKeymap } from '../lib/editor/history';
 import { AssetIndex } from '../lib/editor/asset-index';
 import {
   vaultUploadPlugin,
@@ -145,6 +146,9 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       .config(nord)
       .use(customCommonmark)
       .use(gfm)
+      // Undo/redo (commonmark preset does not include prosemirror-history)
+      .use(historyPlugin)
+      .use(historyKeymap)
       .use(embedSchema)
       .use(embedView)
       .use(embedInputRule)
