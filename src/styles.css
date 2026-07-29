@@ -859,6 +859,10 @@ body {
   min-height: 100%;
   outline: none;
   padding-bottom: 50vh;
+  /* Wrap long unbroken strings (URLs, npubs, tokens) instead of overflowing.
+     `overflow-wrap: anywhere` works where `word-wrap: break-word` (from the
+     nord theme) fails in WebKit: long words at the start of a line. */
+  overflow-wrap: anywhere;
 }
 
 .milkdown-editor .ProseMirror:focus {
