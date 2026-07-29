@@ -124,61 +124,76 @@ fn get_configured_vault(app: &AppHandle) -> Option<PathBuf> {
     Path::new(&vault).canonicalize().ok()
 }
 
-/// Validates that a path is within the allowed vault directory.
-/// Returns the canonicalized path if valid, or an error if path traversal is detected.
-fn validate_vault_path(path: &str, vault_path: &str) -> Result<PathBuf, String> {
-    let path = Path::new(path);
-    let vault = Path::new(vault_path);
-    
-    // Canonicalize both paths to resolve any .. or symlinks
-    // For non-existent paths (e.g., new files or nested folders), walk up to the
-    // nearest existing ancestor, canonicalize that, then re-append the remaining
-    // components after verifying none of them are `..` (or otherwise unsafe).
-    let canonical_path = if path.exists() {
-        path.canonicalize().map_err(|e| format!("Invalid path: {}", e))?
-    } else {
-        // Find the nearest existing ancestor (skip the path itself, which doesn't exist)
-        let existing_ancestor = path
-            .ancestors()
-            .skip(1)
-            .find(|a| a.exists())
-            .ok_or("Invalid path: no existing ancestor directory")?;
-        let canonical_ancestor = existing_ancestor
-            .canonicalize()
-            .map_err(|e| format!("Invalid path: {}", e))?;
-        // Verify the remaining (non-existent) components are plain names
-        let remainder = path
-            .strip_prefix(existing_ancestor)
-            .map_err(|_| "Invalid path: unable to resolve path components".to_string())?;
-        let mut resolved = canonical_ancestor;
-        for component in remainder.components() {
-            match component {
-                std::path::Component::Normal(name) => {
-                    if name.is_empty() {
-                        return Err("Invalid path: empty path component".to_string());
-                    }
-                    resolved.push(name);
-                }
-                std::path::Component::CurDir => {}
-                _ => {
+/// Resolve `.` and `..` components without touching the filesystem, so that a
+/// symlink in the middle of the path is left intact rather than followed.
+///
+/// A leading `..` that would climb above the root is an error: it is the one
+/// shape that lets a caller escape the vault lexically.
+fn lexically_normalize(path: &Path) -> Result<PathBuf, String> {
+    let mut resolved = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                // `pop` returns false once we are back at the prefix/root.
+                if !resolved.pop() {
                     return Err(format!(
-                        "Invalid path: unsafe component in '{}'",
+                        "Invalid path: '{}' climbs above the filesystem root",
                         path.display()
                     ));
                 }
             }
+            other => resolved.push(other.as_os_str()),
         }
-        resolved
-    };
-    
-    let canonical_vault = vault.canonicalize().map_err(|e| format!("Invalid vault path: {}", e))?;
-    
-    // Check if the path starts with the vault path
-    if !canonical_path.starts_with(&canonical_vault) {
-        return Err(format!("Access denied: path '{}' is outside the vault directory", path.display()));
     }
-    
-    Ok(canonical_path)
+    Ok(resolved)
+}
+
+/// Validates that a path is within the allowed vault directory.
+/// Returns the normalized path if valid, or an error if path traversal is detected.
+///
+/// Containment is decided **lexically**, not by `canonicalize()`. Canonicalizing
+/// first resolves symlinks, so a directory the user deliberately linked into
+/// their vault (`Vault/Projects -> ~/Projects/onyx`) resolved to a path outside
+/// the vault and every file under it was rejected — while still being listed in
+/// the sidebar, because the tree builder never canonicalized. Linked folders are
+/// an intentional grant by the person who created the link, so we follow them;
+/// `..` escapes are still rejected, which is what the traversal guard is for.
+fn validate_vault_path(path: &str, vault_path: &str) -> Result<PathBuf, String> {
+    let path = Path::new(path);
+    let vault = Path::new(vault_path);
+
+    if path.is_relative() {
+        return Err(format!(
+            "Invalid path: '{}' must be absolute",
+            path.display()
+        ));
+    }
+
+    let normalized_path = lexically_normalize(path)?;
+    let normalized_vault = lexically_normalize(vault)?;
+
+    // The vault itself may live behind a symlink, in which case callers can hold
+    // either spelling of it. Accept both, and only the vault's own two forms —
+    // this is a prefix test on the vault, never on the requested path.
+    let mut allowed_roots = vec![normalized_vault.clone()];
+    if let Ok(canonical_vault) = vault.canonicalize() {
+        if canonical_vault != normalized_vault {
+            allowed_roots.push(canonical_vault);
+        }
+    }
+
+    if !allowed_roots
+        .iter()
+        .any(|root| normalized_path.starts_with(root))
+    {
+        return Err(format!(
+            "Access denied: path '{}' is outside the vault directory",
+            path.display()
+        ));
+    }
+
+    Ok(normalized_path)
 }
 
 /// Check if a path is within the config directory (for settings, not vault files)
@@ -272,8 +287,33 @@ pub struct SearchResult {
     matches: Vec<SearchMatch>,
 }
 
+/// How deep the sidebar tree will descend. Linked folders can point anywhere,
+/// so this is a backstop against a pathologically deep target as well as cycles.
+const MAX_TREE_DEPTH: usize = 32;
+
 fn build_file_tree(path: &Path) -> Vec<FileEntry> {
+    let mut visited: Vec<PathBuf> = Vec::new();
+    build_file_tree_inner(path, &mut visited, 0)
+}
+
+/// `visited` holds the canonical form of every directory on the current branch.
+/// Because directory links are followed, `Vault/loop -> Vault` would otherwise
+/// recurse until the stack ran out; re-entering a directory we are already
+/// inside is the definition of a cycle, so we stop there.
+fn build_file_tree_inner(path: &Path, visited: &mut Vec<PathBuf>, depth: usize) -> Vec<FileEntry> {
     let mut entries: Vec<FileEntry> = Vec::new();
+
+    if depth >= MAX_TREE_DEPTH {
+        return entries;
+    }
+
+    let canonical = path.canonicalize().ok();
+    if let Some(canonical) = &canonical {
+        if visited.contains(canonical) {
+            return entries;
+        }
+        visited.push(canonical.clone());
+    }
 
     if let Ok(read_dir) = fs::read_dir(path) {
         let mut items: Vec<_> = read_dir.filter_map(|e| e.ok()).collect();
@@ -304,7 +344,7 @@ fn build_file_tree(path: &Path) -> Vec<FileEntry> {
             }
 
             let children = if is_dir {
-                Some(build_file_tree(&item_path))
+                Some(build_file_tree_inner(&item_path, visited, depth + 1))
             } else {
                 None
             };
@@ -316,6 +356,10 @@ fn build_file_tree(path: &Path) -> Vec<FileEntry> {
                 children,
             });
         }
+    }
+
+    if canonical.is_some() {
+        visited.pop();
     }
 
     entries
@@ -611,19 +655,23 @@ async fn search_files(app: AppHandle, path: String, query: String) -> Result<Vec
     const MAX_RESULTS: usize = 50;
     const MAX_MATCHES_PER_FILE: usize = 5;
 
-    // Security: only allow searching within the configured vault
+    // Security: only allow searching within the configured vault. Same lexical
+    // containment rule as validate_vault_path — canonicalizing here put every
+    // linked folder out of scope of search.
     let vault = get_configured_vault(&app).ok_or("No vault is configured")?;
-    let root = Path::new(&path)
-        .canonicalize()
-        .map_err(|e| format!("Invalid path: {}", e))?;
-    if !root.starts_with(&vault) {
-        return Err("Access denied: search path is outside the vault directory".to_string());
-    }
+    let vault_str = vault.to_string_lossy().to_string();
+    let root = validate_vault_path(&path, &vault_str)
+        .map_err(|_| "Access denied: search path is outside the vault directory".to_string())?;
 
     let mut results: Vec<SearchResult> = Vec::new();
     let query_lower = query.to_lowercase();
 
     for entry in WalkDir::new(&root)
+        // Follow linked folders so search covers the same tree the sidebar shows.
+        // WalkDir detects link cycles itself and surfaces them as an Err, which
+        // the filter_map below drops.
+        .follow_links(true)
+        .max_depth(MAX_TREE_DEPTH)
         .into_iter()
         // Skip hidden files/directories (e.g. .git, .obsidian) entirely
         .filter_entry(|e| {
@@ -3109,4 +3157,123 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod vault_path_tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    /// Builds a throwaway vault:
+    ///   <tmp>/vault/Notes/plain.md
+    ///   <tmp>/vault/Projects -> <tmp>/real/onyx   (the shape that was broken)
+    ///   <tmp>/real/onyx/README.md
+    fn fixture(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("onyx-vault-test-{}-{}", std::process::id(), tag));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("vault/Notes")).unwrap();
+        fs::create_dir_all(root.join("real/onyx")).unwrap();
+        fs::write(root.join("vault/Notes/plain.md"), "# plain").unwrap();
+        fs::write(root.join("real/onyx/README.md"), "# linked").unwrap();
+        symlink(root.join("real/onyx"), root.join("vault/Projects")).unwrap();
+        root
+    }
+
+    fn vault_of(root: &Path) -> String {
+        root.join("vault").to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn accepts_an_ordinary_file_in_the_vault() {
+        let root = fixture("ordinary");
+        let vault = vault_of(&root);
+        let target = root.join("vault/Notes/plain.md");
+        assert!(validate_vault_path(&target.to_string_lossy(), &vault).is_ok());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn accepts_a_file_inside_a_linked_folder() {
+        // This is the regression: canonicalize() resolved the path to
+        // <tmp>/real/onyx/README.md and the starts_with check rejected it.
+        let root = fixture("linked");
+        let vault = vault_of(&root);
+        let target = root.join("vault/Projects/README.md");
+        let resolved = validate_vault_path(&target.to_string_lossy(), &vault)
+            .expect("a file inside a linked folder must be readable");
+        assert_eq!(resolved, target, "the link path is preserved, not resolved");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn accepts_the_link_itself() {
+        let root = fixture("linkdir");
+        let vault = vault_of(&root);
+        let target = root.join("vault/Projects");
+        assert!(validate_vault_path(&target.to_string_lossy(), &vault).is_ok());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn accepts_a_file_that_does_not_exist_yet() {
+        // New-note creation inside a linked folder.
+        let root = fixture("newfile");
+        let vault = vault_of(&root);
+        let target = root.join("vault/Projects/brand-new.md");
+        assert!(validate_vault_path(&target.to_string_lossy(), &vault).is_ok());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn still_rejects_dot_dot_traversal() {
+        let root = fixture("traversal");
+        let vault = vault_of(&root);
+        let target = format!("{}/Notes/../../real/onyx/README.md", vault);
+        assert!(
+            validate_vault_path(&target, &vault).is_err(),
+            "`..` out of the vault must stay denied"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn still_rejects_an_unrelated_absolute_path() {
+        let root = fixture("outside");
+        let vault = vault_of(&root);
+        assert!(validate_vault_path("/etc/passwd", &vault).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rejects_a_relative_path() {
+        let root = fixture("relative");
+        let vault = vault_of(&root);
+        assert!(validate_vault_path("Notes/plain.md", &vault).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rejects_a_sibling_that_merely_shares_a_name_prefix() {
+        // "<tmp>/vault-evil" must not pass a naive starts_with on "<tmp>/vault".
+        let root = fixture("prefix");
+        let vault = vault_of(&root);
+        fs::create_dir_all(root.join("vault-evil")).unwrap();
+        fs::write(root.join("vault-evil/secret.md"), "x").unwrap();
+        let target = root.join("vault-evil/secret.md");
+        assert!(
+            validate_vault_path(&target.to_string_lossy(), &vault).is_err(),
+            "Path::starts_with is component-wise, so this must be denied"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn tree_walk_terminates_on_a_link_cycle() {
+        let root = fixture("cycle");
+        symlink(root.join("vault"), root.join("vault/Notes/loop")).unwrap();
+        // Would recurse forever without the visited set.
+        let tree = build_file_tree(&root.join("vault"));
+        assert!(!tree.is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
 }
