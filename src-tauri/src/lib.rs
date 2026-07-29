@@ -378,7 +378,7 @@ fn list_files(path: String) -> Result<Vec<FileEntry>, String> {
 fn read_file(path: String, vault_path: Option<String>) -> Result<String, String> {
     // Always validate path is within vault
     let vault = vault_path.ok_or("vault_path is required for read_file")?;
-    validate_vault_path(&path, &vault)?;
+    let path = validate_vault_path(&path, &vault)?;
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
@@ -386,7 +386,7 @@ fn read_file(path: String, vault_path: Option<String>) -> Result<String, String>
 fn write_file(path: String, content: String, vault_path: Option<String>) -> Result<(), String> {
     // Always validate path is within vault
     let vault = vault_path.ok_or("vault_path is required for write_file")?;
-    validate_vault_path(&path, &vault)?;
+    let path = validate_vault_path(&path, &vault)?;
     fs::write(&path, content).map_err(|e| e.to_string())
 }
 
@@ -394,9 +394,9 @@ fn write_file(path: String, content: String, vault_path: Option<String>) -> Resu
 fn write_binary_file(path: String, data: Vec<u8>, vault_path: Option<String>) -> Result<(), String> {
     // Always validate path is within vault
     let vault = vault_path.ok_or("vault_path is required for write_binary_file")?;
-    validate_vault_path(&path, &vault)?;
+    let path = validate_vault_path(&path, &vault)?;
     // Create parent directories if needed
-    if let Some(parent) = Path::new(&path).parent() {
+    if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     fs::write(&path, data).map_err(|e| e.to_string())
@@ -406,7 +406,7 @@ fn write_binary_file(path: String, data: Vec<u8>, vault_path: Option<String>) ->
 fn read_binary_file(path: String, vault_path: Option<String>) -> Result<tauri::ipc::Response, String> {
     // Always validate path is within vault
     let vault = vault_path.ok_or("vault_path is required for read_binary_file")?;
-    validate_vault_path(&path, &vault)?;
+    let path = validate_vault_path(&path, &vault)?;
     // Return a raw IPC response so the frontend receives an ArrayBuffer instead of
     // a JSON number array (huge serialization overhead for large files like PDFs).
     let bytes = fs::read(&path).map_err(|e| e.to_string())?;
@@ -417,8 +417,7 @@ fn read_binary_file(path: String, vault_path: Option<String>) -> Result<tauri::i
 fn create_file(path: String, vault_path: Option<String>) -> Result<(), String> {
     // Always validate path is within vault
     let vault = vault_path.ok_or("vault_path is required for create_file")?;
-    validate_vault_path(&path, &vault)?;
-    let path = Path::new(&path);
+    let path = validate_vault_path(&path, &vault)?;
     if path.exists() {
         return Err("File already exists".to_string());
     }
@@ -432,7 +431,7 @@ fn create_file(path: String, vault_path: Option<String>) -> Result<(), String> {
 fn create_folder(path: String, vault_path: Option<String>) -> Result<(), String> {
     // Always validate path is within vault
     let vault = vault_path.ok_or("vault_path is required for create_folder")?;
-    validate_vault_path(&path, &vault)?;
+    let path = validate_vault_path(&path, &vault)?;
     fs::create_dir_all(&path).map_err(|e| e.to_string())
 }
 
@@ -488,8 +487,7 @@ fn file_exists(path: String) -> bool {
 fn delete_file(path: String, vault_path: Option<String>) -> Result<(), String> {
     // Always validate path is within vault
     let vault = vault_path.ok_or("vault_path is required for delete_file")?;
-    validate_vault_path(&path, &vault)?;
-    let path = Path::new(&path);
+    let path = validate_vault_path(&path, &vault)?;
     if path.is_dir() {
         fs::remove_dir_all(path).map_err(|e| e.to_string())
     } else {
@@ -501,8 +499,8 @@ fn delete_file(path: String, vault_path: Option<String>) -> Result<(), String> {
 fn rename_file(old_path: String, new_path: String, vault_path: Option<String>) -> Result<(), String> {
     // Always validate both paths are within vault
     let vault = vault_path.ok_or("vault_path is required for rename_file")?;
-    validate_vault_path(&old_path, &vault)?;
-    validate_vault_path(&new_path, &vault)?;
+    let old_path = validate_vault_path(&old_path, &vault)?;
+    let new_path = validate_vault_path(&new_path, &vault)?;
     fs::rename(&old_path, &new_path).map_err(|e| e.to_string())
 }
 
@@ -510,16 +508,14 @@ fn rename_file(old_path: String, new_path: String, vault_path: Option<String>) -
 fn copy_file(source: String, dest: String, vault_path: Option<String>) -> Result<(), String> {
     // Always validate both paths are within vault
     let vault = vault_path.ok_or("vault_path is required for copy_file")?;
-    validate_vault_path(&source, &vault)?;
-    validate_vault_path(&dest, &vault)?;
-    let source_path = Path::new(&source);
-    let dest_path = Path::new(&dest);
+    let source_path = validate_vault_path(&source, &vault)?;
+    let dest_path = validate_vault_path(&dest, &vault)?;
 
     if source_path.is_dir() {
         // Copy directory recursively
-        copy_dir_recursive(source_path, dest_path).map_err(|e| e.to_string())
+        copy_dir_recursive(&source_path, &dest_path).map_err(|e| e.to_string())
     } else {
-        fs::copy(&source, &dest)
+        fs::copy(&source_path, &dest_path)
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
@@ -3264,6 +3260,88 @@ mod vault_path_tests {
             validate_vault_path(&target.to_string_lossy(), &vault).is_err(),
             "Path::starts_with is component-wise, so this must be denied"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Momus's case 17: enough `..` after a symlink hop to leave the vault.
+    /// Lexical normalization pops the link component rather than climbing out of
+    /// the link's *target*, so the two orderings disagree — but both land outside
+    /// the vault here, and the lexical one is denied. Deny is the safe direction.
+    #[test]
+    fn dot_dot_after_a_link_hop_out_of_the_vault_is_denied() {
+        let root = fixture("case17");
+        let vault = vault_of(&root);
+        fs::write(root.join("real/secret.md"), "secret").unwrap();
+        let attack = format!("{}/Projects/../../real/secret.md", vault);
+
+        assert!(
+            validate_vault_path(&attack, &vault).is_err(),
+            "`..` climbing past the vault root must be denied even after a link hop"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The other half of case 17: a single `..` after a link hop stays inside the
+    /// vault lexically, while the OS would have resolved it against the link's
+    /// target and landed somewhere else entirely. That divergence is only safe
+    /// because callers operate on the returned path, never the raw string — this
+    /// test pins the returned path, which is what makes the rule sound.
+    #[test]
+    fn dot_dot_after_a_link_hop_pops_the_link_not_its_target() {
+        let root = fixture("popped");
+        let vault = vault_of(&root);
+        let input = format!("{}/Projects/../Notes/plain.md", vault);
+
+        let resolved = validate_vault_path(&input, &vault)
+            .expect("lexically this lands back inside the vault");
+        assert_eq!(
+            resolved,
+            Path::new(&vault).join("Notes/plain.md"),
+            "the returned path must pop the link component, not follow it"
+        );
+        assert!(resolved.exists(), "and it must name the real in-vault file");
+        // The OS ordering would have reached <tmp>/real/Notes/plain.md.
+        assert!(!root.join("real/Notes/plain.md").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The returned path is the security boundary: every command operates on it,
+    /// so it must never point outside the vault even when the raw input would.
+    #[test]
+    fn returned_path_is_always_inside_the_vault() {
+        let root = fixture("returned");
+        let vault = vault_of(&root);
+        let inputs = [
+            format!("{}/Projects/README.md", vault),
+            format!("{}/Projects/../Notes/plain.md", vault),
+            format!("{}/Notes/./plain.md", vault),
+        ];
+        for input in inputs {
+            let resolved = validate_vault_path(&input, &vault).expect(&input);
+            assert!(
+                resolved.starts_with(&vault),
+                "{} resolved outside the vault: {:?}",
+                input,
+                resolved
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Momus F2: `links/parent-loop -> ..` points at the vault itself. `is_dir()`
+    /// follows it, so the pre-fix walker descended forever. Mutual and self loops
+    /// were never the crash — `is_dir()` returns false on ELOOP.
+    #[test]
+    fn tree_walk_terminates_on_an_ancestor_link() {
+        let root = fixture("ancestor");
+        let vault = root.join("vault");
+        symlink("..", vault.join("Notes/parent-loop")).unwrap();
+        symlink("loop-b", vault.join("Notes/loop-a")).unwrap();
+        symlink("loop-a", vault.join("Notes/loop-b")).unwrap();
+        symlink("self", vault.join("Notes/self")).unwrap();
+
+        let tree = build_file_tree(&vault);
+        assert!(!tree.is_empty(), "the walk must still return the real entries");
         let _ = fs::remove_dir_all(&root);
     }
 
