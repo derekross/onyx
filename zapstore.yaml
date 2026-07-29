@@ -13,8 +13,7 @@ description: |
 license: MIT
 repository: https://github.com/derekross/onyx
 website: https://onyxnotes.dev
-assets:
-  - app-universal-release.apk
+match: app-universal-release\.apk$
 metadata_sources:
   - github
 tags:
