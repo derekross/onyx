@@ -2,23 +2,39 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 // Detects the Linux setups where the WebKitGTK DMABUF renderer is known to
-// fail and render a blank/white screen. Disabling that renderer makes WebKitGTK
-// composite through CPU shared memory instead of zero-copy GPU buffers, which
-// costs CPU in both this process and the compositor, so it is only worth paying
-// where it is actually needed.
+// fail. Disabling that renderer makes WebKitGTK composite through CPU shared
+// memory instead of zero-copy GPU buffers, which costs CPU in both this process
+// and the compositor, so it is only worth paying where it is actually needed.
+//
+// The failure has two faces, and they are the same bug at different moments:
+// the surface never receives a first frame (blank/white window, #19), or it
+// stops receiving new ones (the window keeps showing a stale frame and looks
+// frozen -- the cursor stops changing shape, and input appears to do nothing
+// while the app is in fact running normally underneath).
 #[cfg(target_os = "linux")]
 fn needs_dmabuf_workaround() -> bool {
-    // Proprietary Nvidia driver.
+    // Proprietary Nvidia driver, including on X11.
     let nvidia = std::path::Path::new("/proc/driver/nvidia/version").exists()
         || std::path::Path::new("/sys/module/nvidia").exists();
 
-    // Hyprland, reported independently of the GPU vendor.
-    let hyprland = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()
-        || std::env::var("XDG_CURRENT_DESKTOP")
-            .map(|desktop| desktop.to_ascii_lowercase().contains("hyprland"))
+    // Any Wayland session.
+    //
+    // This deliberately replaces the previous Hyprland-only check. Enumerating
+    // known-broken compositors does not hold up: the reports so far are
+    // Hyprland (#19) and COSMIC, the latter on Intel integrated graphics, so
+    // the fault is not vendor-specific and not confined to one compositor.
+    // DMABUF is the Wayland compositing path, so scope the workaround to
+    // Wayland and leave X11 on the zero-copy renderer. Hyprland is a Wayland
+    // compositor and stays covered by this.
+    //
+    // Users who want zero-copy back can set WEBKIT_DISABLE_DMABUF_RENDERER=0,
+    // which main() honours over this function.
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var("XDG_SESSION_TYPE")
+            .map(|session| session.eq_ignore_ascii_case("wayland"))
             .unwrap_or(false);
 
-    nvidia || hyprland
+    nvidia || wayland
 }
 
 fn main() {
