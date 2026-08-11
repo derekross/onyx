@@ -1278,7 +1278,7 @@ const App: Component = () => {
     // Non-markdown files are read-only viewers -- no text content needed
     if (fileType !== 'markdown') {
       setTabs([...tabs(), { path, name, content: '', isDirty: false, fileType }]);
-      setActiveTabIndex(tabs().length);
+      setActiveTabIndex(tabs().length - 1);
       return;
     }
 
@@ -1287,7 +1287,8 @@ const App: Component = () => {
       const content = await platform.vault.read(path, vaultPath() ?? '');
 
       setTabs([...tabs(), { path, name, content, isDirty: false, fileType }]);
-      setActiveTabIndex(tabs().length); // Will be the new last index after state updates
+      // setTabs applies synchronously, so tabs() is already the new array here.
+      setActiveTabIndex(tabs().length - 1);
 
       // Set line to scroll to after editor loads
       if (line) {
@@ -2232,7 +2233,7 @@ const App: Component = () => {
         setActiveTabIndex(existingIndex);
       } else {
         setTabs([...tabs(), { path, name, content, isDirty: false, fileType: 'markdown' }]);
-        setActiveTabIndex(tabs().length);
+        setActiveTabIndex(tabs().length - 1);
       }
       
       // Refresh sidebar to show new file/folder
@@ -2285,7 +2286,7 @@ const App: Component = () => {
       const name = notePath.split('/').pop() || noteName;
       
       setTabs([...tabs(), { path: notePath, name, content, isDirty: false, fileType: 'markdown' }]);
-      setActiveTabIndex(tabs().length);
+      setActiveTabIndex(tabs().length - 1);
       setShowTemplatesModal(false);
       
       // Refresh sidebar
